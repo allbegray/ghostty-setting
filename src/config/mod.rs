@@ -3,7 +3,6 @@ pub mod schema;
 
 use std::path::PathBuf;
 
-pub use schema::{Kind, Opt};
 
 /// A config file we found on disk, in Ghostty's precedence order (highest first).
 pub struct Candidate {

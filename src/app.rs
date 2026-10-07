@@ -6,31 +6,41 @@
 //! geometry, one scroll owner (the option list). Config semantics still live
 //! in the unchanged line-preserving [`crate::config`] core.
 //!
-//! Deliberate deviations, with reasons:
-//! - Rows are custom lanes instead of `Form`/`Field`: every row needs the
-//!   same four lanes (identity / value / state / trailing action) and `Form`
-//!   owns a label column that would fight the state and action lanes.
-//! - Bool/Enum rows still cycle on click: the model is tri-state
-//!   (unset/true/false) and `Switch` can only express two. A tri-state
-//!   control is a separate design decision, not part of this rewrite.
+//! Deliberate design choices:
+//! - `Bool` rows use `Switch`, with the "해제" action resetting to default/unset.
+//! - `Enum` rows use `Select` dropdown, reset clears to default.
+//! - `Int`, `Float`, `Text` rows use `Input` with `opt.hint` placeholder.
+//! - `Color` rows provide `ColorPicker` with current hex value display.
+//! - `List` and `Flags` rows display clean read-only summaries.
+//! - Option label column includes platform badge and full `opt.doc` tooltip.
+//! - 4-lane aligned layout (option, value, state, reset action).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, TitleBar,
+    IndexPath,
     button::{Button, ButtonVariants as _},
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex, v_flex,
     input::{Input, InputEvent, InputState},
-    label::Label,
     scroll::ScrollableElement as _,
+    select::{Select, SelectEvent, SelectState},
+    searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     status_bar::StatusBar,
+    switch::Switch,
     tooltip::Tooltip,
+    Icon,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, Focusable as _, IntoElement, InteractiveElement as _,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Window, actions, div, px,
+    AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions, div, px,
 };
 use gpui_kit::base::Disableable as _;
 
@@ -38,7 +48,182 @@ use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
 use crate::config::{self};
 
+fn category_icon(idx: usize) -> IconName {
+    match idx {
+        0 => IconName::Type,
+        1 => IconName::Palette,
+        2 => IconName::MousePointer,
+        3 => IconName::Clipboard,
+        4 => IconName::AppWindow,
+        5 => IconName::Terminal,
+        6 => IconName::SlidersHorizontal,
+        _ => IconName::Zap,
+    }
+}
 actions!(settings, [Save, FocusSearch]);
+const POPULAR_ACTIONS: &[(&str, &str)] = &[
+    ("copy_to_clipboard", "클립보드 복사"),
+    ("paste_from_clipboard", "클립보드 붙여넣기"),
+    ("new_window", "새 창 열기"),
+    ("new_tab", "새 탭 열기"),
+    ("close_tab", "현재 탭 닫기"),
+    ("close_surface", "현재 서피스 닫기"),
+    ("close_window", "창 닫기"),
+    ("previous_tab", "이전 탭 이동"),
+    ("next_tab", "다음 탭 이동"),
+    ("toggle_fullscreen", "전체화면 토글"),
+    ("toggle_quick_terminal", "퀵 터미널 토글"),
+    ("clear_screen", "화면 지우기"),
+    ("increase_font_size:1", "글꼴 확대 (+1)"),
+    ("decrease_font_size:1", "글꼴 축소 (-1)"),
+    ("reset_font_size", "글꼴 크기 초기화"),
+    ("scroll_to_top", "맨 위로 스크롤"),
+    ("scroll_to_bottom", "맨 아래로 스크롤"),
+    ("jump_to_prompt:1", "다음 프롬프트"),
+    ("jump_to_prompt:-1", "이전 프롬프트"),
+    ("new_split:right", "우측 분할"),
+    ("new_split:down", "하단 분할"),
+    ("toggle_split_zoom", "분할 줌 토글"),
+    ("toggle_command_palette", "커맨드 팔레트"),
+    ("open_config", "설정 파일 열기"),
+    ("reload_config", "설정 다시 불러오기"),
+    ("reset", "터미널 초기화"),
+];
+
+#[derive(Clone, Debug, PartialEq)]
+enum DiffLine {
+    Same(String),
+    Added(String),
+    Removed(String),
+}
+
+fn compute_line_diff(old_text: &str, new_text: &str) -> Vec<DiffLine> {
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    let new_lines: Vec<&str> = new_text.lines().collect();
+
+    let m = old_lines.len();
+    let n = new_lines.len();
+    let mut dp = vec![vec![0; n + 1]; m + 1];
+
+    for i in 0..m {
+        for j in 0..n {
+            if old_lines[i] == new_lines[j] {
+                dp[i + 1][j + 1] = dp[i][j] + 1;
+            } else {
+                dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
+            }
+        }
+    }
+
+    let mut diff = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
+            diff.push(DiffLine::Same(old_lines[i - 1].to_string()));
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            diff.push(DiffLine::Added(new_lines[j - 1].to_string()));
+            j -= 1;
+        } else if i > 0 {
+            diff.push(DiffLine::Removed(old_lines[i - 1].to_string()));
+            i -= 1;
+        }
+    }
+    diff.reverse();
+    diff
+}
+
+fn is_modifier_key_name(key: &str) -> bool {
+    matches!(
+        key.to_lowercase().as_str(),
+        "ctrl"
+            | "control"
+            | "alt"
+            | "opt"
+            | "option"
+            | "shift"
+            | "cmd"
+            | "command"
+            | "super"
+            | "fn"
+            | "capslock"
+            | "caps_lock"
+    )
+}
+
+fn keystroke_to_ghostty_trigger(keystroke: &gpui_kit::Keystroke) -> String {
+    let mut parts = Vec::new();
+    if keystroke.modifiers.control {
+        parts.push("ctrl");
+    }
+    if keystroke.modifiers.alt {
+        parts.push("alt");
+    }
+    if keystroke.modifiers.shift {
+        parts.push("shift");
+    }
+    if keystroke.modifiers.platform {
+        parts.push("super");
+    }
+
+    let lower = keystroke.key.to_lowercase();
+    let key = match lower.as_str() {
+        "escape" | "esc" => "esc",
+        "return" | "enter" => "enter",
+        "tab" => "tab",
+        "space" => "space",
+        "backspace" => "backspace",
+        "up" | "arrowup" => "up",
+        "down" | "arrowdown" => "down",
+        "left" | "arrowleft" => "left",
+        "right" | "arrowright" => "right",
+        other => other,
+    };
+    parts.push(key);
+    parts.join("+")
+}
+
+fn ghostty_trigger_to_pretty(trigger: &str) -> String {
+    let parts: Vec<&str> = trigger.split('+').collect();
+    let mut out = String::new();
+    for &part in &parts {
+        match part.to_lowercase().as_str() {
+            "super" | "cmd" => out.push('⌘'),
+            "ctrl" | "control" => out.push('⌃'),
+            "alt" | "opt" | "option" => out.push('⌥'),
+            "shift" => out.push('⇧'),
+            "enter" | "return" => out.push_str("↵"),
+            "esc" | "escape" => out.push_str("⎋"),
+            "backspace" => out.push_str("⌫"),
+            "tab" => out.push_str("⇥"),
+            "space" => out.push_str("␣"),
+            "up" | "arrowup" => out.push('↑'),
+            "down" | "arrowdown" => out.push('↓'),
+            "left" | "arrowleft" => out.push('←'),
+            "right" | "arrowright" => out.push('→'),
+            other => {
+                out.push_str(&other.to_uppercase());
+            }
+        }
+    }
+    out
+}
+
+pub enum ActiveModal {
+    ListEditor {
+        key: &'static str,
+        items: Vec<String>,
+        recorded_trigger: String,
+        selected_action: String,
+        is_recording: bool,
+        recorder_focus: FocusHandle,
+        custom_action_input: Entity<InputState>,
+        new_item_input: Entity<InputState>,
+    },
+    DiffViewer,
+}
 
 pub struct SettingsView {
     path: PathBuf,
@@ -48,7 +233,14 @@ pub struct SettingsView {
     search: String,
     search_input: Entity<InputState>,
     notice: Option<String>,
+    /// Per-row retained component state, created lazily on first render.
+    /// Values held here are the editing surface; the file is only written
+    /// once the row's subscription has both the key and the new text.
+    text_inputs: HashMap<&'static str, Entity<InputState>>,
+    selects: HashMap<&'static str, Entity<SelectState<SearchableVec<SharedString>>>>,
+    colors: HashMap<&'static str, Entity<ColorPickerState>>,
     _subscriptions: Vec<Subscription>,
+    active_modal: Option<ActiveModal>,
 }
 
 impl SettingsView {
@@ -70,7 +262,11 @@ impl SettingsView {
             search: String::new(),
             search_input,
             notice: None,
+            text_inputs: HashMap::new(),
+            selects: HashMap::new(),
+            colors: HashMap::new(),
             _subscriptions: vec![subscription],
+            active_modal: None,
         }
     }
 
@@ -102,6 +298,11 @@ impl SettingsView {
         self.file = LineFile::parse(&text);
         self.original = text;
         self.notice = Some("파일 내용을 다시 불러왔습니다.".to_string());
+        // Row states mirror the file, so drop them and let render rebuild.
+        self.text_inputs.clear();
+        self.selects.clear();
+        self.colors.clear();
+        self.active_modal = None;
         cx.notify();
     }
 
@@ -133,44 +334,12 @@ impl SettingsView {
         }
     }
 
-    /// Bool rows cycle unset → true → false → unset;
-    /// Enum rows cycle unset → each value → unset.
-    fn cycle_value(&mut self, key: &'static str, cx: &mut Context<Self>) {
-        let Some(opt) = lookup(key) else { return };
-        match opt.kind {
-            Kind::Bool => {
-                let next = match self.file.get(key).as_deref() {
-                    None => Some("true".to_string()),
-                    Some("true") => Some("false".to_string()),
-                    _ => None,
-                };
-                match next {
-                    Some(v) => self.file.set(key, &v),
-                    None => self.file.remove(key),
-                }
-                cx.notify();
-            }
-            Kind::Enum(items) => {
-                let cur = self.file.get(key);
-                let next = match cur.as_deref() {
-                    None => Some(Some(items[0].to_string())),
-                    Some(c) => match items.iter().position(|i| *i == c) {
-                        Some(i) if i + 1 < items.len() => Some(Some(items[i + 1].to_string())),
-                        _ => Some(None),
-                    },
-                };
-                match next {
-                    Some(Some(v)) => self.file.set(key, &v),
-                    _ => self.file.remove(key),
-                }
-                cx.notify();
-            }
-            _ => {}
-        }
-    }
-
     fn reset_key(&mut self, key: &str, cx: &mut Context<Self>) {
         self.file.remove(key);
+        self.text_inputs.remove(key);
+        self.selects.remove(key);
+        self.colors.remove(key);
+        self.notice = None;
         cx.notify();
     }
 
@@ -200,48 +369,1225 @@ impl SettingsView {
             .filter(|o| self.is_set(o))
             .count()
     }
+
+    fn render_list_editor_modal(
+        &self,
+        key: &'static str,
+        items: &[String],
+        recorded_trigger: &str,
+        selected_action: &str,
+        is_recording: bool,
+        recorder_focus: &FocusHandle,
+        custom_action_input: &Entity<InputState>,
+        new_item_input: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let is_keybind = key == "keybind";
+        let opt_label = lookup(key).map(|o| o.label).unwrap_or(key);
+        let view = cx.entity();
+
+        let header = h_flex()
+            .items_center()
+            .justify_between()
+            .pb_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .size(px(32.))
+                            .rounded_lg()
+                            .bg(cx.theme().primary.opacity(0.12))
+                            .text_color(cx.theme().primary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(if is_keybind { IconName::Keyboard } else { IconName::Pencil }).small()),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0()
+                            .child(
+                                div()
+                                    .font_semibold()
+                                    .text_base()
+                                    .child(if is_keybind { "키 바인딩 설정 (`keybind`)".to_string() } else { format!("{opt_label} 목록 편집 (`{key}`)") }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if is_keybind {
+                                        "단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다."
+                                    } else {
+                                        "설정 파일에 반복 지정되는 항목 목록을 관리합니다."
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                Button::new("close-list-modal")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::X)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active_modal = None;
+                        cx.notify();
+                    })),
+            );
+
+        let items_list = div()
+            .max_h(px(220.))
+            .overflow_y_scrollbar()
+            .p_1()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted.opacity(0.2))
+            .child(
+                if items.is_empty() {
+                    div()
+                        .py_6()
+                        .flex()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("등록된 항목이 없습니다.")
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .gap_1()
+                        .children(items.iter().enumerate().map(|(ix, item)| {
+                            let view = view.clone();
+                            if is_keybind {
+                                let parts: Vec<&str> = item.splitn(2, '=').collect();
+                                let trigger = parts[0];
+                                let action = parts.get(1).unwrap_or(&"");
+                                let pretty = ghostty_trigger_to_pretty(trigger);
+                                h_flex()
+                                    .id(format!("binding-item-{ix}"))
+                                    .items_center()
+                                    .justify_between()
+                                    .px_3()
+                                    .py(px(6.))
+                                    .rounded_md()
+                                    .bg(cx.theme().background)
+                                    .border_1()
+                                    .border_color(cx.theme().border.opacity(0.5))
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py(px(2.))
+                                                    .rounded_md()
+                                                    .bg(cx.theme().muted)
+                                                    .border_1()
+                                                    .border_color(cx.theme().border)
+                                                    .font_family("Menlo")
+                                                    .font_semibold()
+                                                    .text_xs()
+                                                    .child(pretty),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_family("Menlo")
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!("({trigger})")),
+                                            )
+                                            .child(Icon::new(IconName::ArrowRight).xsmall().text_color(cx.theme().muted_foreground))
+                                            .child(div().text_xs().font_medium().child(action.to_string())),
+                                    )
+                                    .child(
+                                        Button::new(format!("del-binding-{ix}"))
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Trash)
+                                            .tooltip("삭제")
+                                            .on_click(move |_, _, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
+                                                        if ix < items.len() {
+                                                            items.remove(ix);
+                                                            cx.notify();
+                                                        }
+                                                    }
+                                                });
+                                            }),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                h_flex()
+                                    .id(format!("generic-item-{ix}"))
+                                    .items_center()
+                                    .justify_between()
+                                    .px_3()
+                                    .py(px(6.))
+                                    .rounded_md()
+                                    .bg(cx.theme().background)
+                                    .border_1()
+                                    .border_color(cx.theme().border.opacity(0.5))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_family("Menlo")
+                                            .child(item.clone()),
+                                    )
+                                    .child(
+                                        Button::new(format!("del-item-{ix}"))
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Trash)
+                                            .tooltip("삭제")
+                                            .on_click(move |_, _, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
+                                                        if ix < items.len() {
+                                                            items.remove(ix);
+                                                            cx.notify();
+                                                        }
+                                                    }
+                                                });
+                                            }),
+                                    )
+                                    .into_any_element()
+                            }
+                        }))
+                        .into_any_element()
+                }
+            );
+
+        let add_section = if is_keybind {
+            let trigger_val = recorded_trigger.to_string();
+            let act_val = selected_action.to_string();
+            let is_rec = is_recording;
+            let focus = recorder_focus.clone();
+
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.15))
+                .child(
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 키 바인딩 추가")
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .id("keystroke-recorder")
+                                .track_focus(&focus)
+                                .cursor_pointer()
+                                .flex_1()
+                                .px_3()
+                                .py(px(6.))
+                                .rounded_md()
+                                .border_1()
+                                .when(is_rec, |s| {
+                                    s.bg(cx.theme().primary.opacity(0.15))
+                                        .border_color(cx.theme().primary)
+                                        .text_color(cx.theme().primary)
+                                })
+                                .when(!is_rec, |s| {
+                                    s.bg(cx.theme().background)
+                                        .border_color(cx.theme().border)
+                                        .text_color(cx.theme().foreground)
+                                        .hover(|s| s.border_color(cx.theme().muted_foreground))
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(ActiveModal::ListEditor { is_recording, recorder_focus, .. }) = &mut this.active_modal {
+                                        *is_recording = true;
+                                        window.focus(recorder_focus, cx);
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                    if let Some(ActiveModal::ListEditor { is_recording, recorded_trigger, .. }) = &mut this.active_modal {
+                                        if *is_recording {
+                                            let key_name = &event.keystroke.key;
+                                            if key_name == "escape" {
+                                                *is_recording = false;
+                                                cx.notify();
+                                                return;
+                                            }
+                                            if !is_modifier_key_name(key_name) {
+                                                *recorded_trigger = keystroke_to_ghostty_trigger(&event.keystroke);
+                                                *is_recording = false;
+                                                cx.notify();
+                                            }
+                                        }
+                                    }
+                                }))
+                                .child(
+                                    if is_rec {
+                                        h_flex()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(div().size(px(6.)).rounded_full().bg(cx.theme().warning))
+                                            .child(div().text_xs().font_medium().child("키보드 입력 대기 중... (Esc: 취소)"))
+                                    } else if trigger_val.is_empty() {
+                                        h_flex()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(Icon::new(IconName::Keyboard).xsmall().text_color(cx.theme().muted_foreground))
+                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("클릭하여 단축키 입력..."))
+                                    } else {
+                                        h_flex()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .px_1p5()
+                                                    .py(px(1.))
+                                                    .rounded_sm()
+                                                    .bg(cx.theme().muted)
+                                                    .font_family("Menlo")
+                                                    .font_semibold()
+                                                    .text_xs()
+                                                    .child(ghostty_trigger_to_pretty(&trigger_val)),
+                                            )
+                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("({trigger_val}) - 재입력 클릭")))
+                                    }
+                                )
+                        )
+                        .child(
+                            div()
+                                .w(px(220.))
+                                .child(Input::new(custom_action_input).small())
+                        )
+                        .child(
+                            Button::new("add-binding-btn")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("추가")
+                                .disabled(trigger_val.is_empty())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(ActiveModal::ListEditor { recorded_trigger, custom_action_input, items, selected_action, .. }) = &mut this.active_modal {
+                                        let mut action = custom_action_input.read(cx).value().to_string();
+                                        if action.trim().is_empty() {
+                                            action = selected_action.clone();
+                                        }
+                                        if !recorded_trigger.is_empty() && !action.trim().is_empty() {
+                                            let entry = format!("{recorded_trigger}={}", action.trim());
+                                            items.push(entry);
+                                            recorded_trigger.clear();
+                                            cx.notify();
+                                        }
+                                    }
+                                }))
+                        )
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 동작 빠른 선택:"))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .flex_wrap()
+                                .children(POPULAR_ACTIONS.iter().take(8).map(|(act, desc)| {
+                                    let act_str = act.to_string();
+                                    let view = view.clone();
+                                    let is_sel = act_val == *act;
+                                    div()
+                                        .id(format!("quick-action-{act}"))
+                                        .cursor_pointer()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .border_1()
+                                        .text_xs()
+                                        .when(is_sel, |s| {
+                                            s.bg(cx.theme().primary.opacity(0.12))
+                                                .border_color(cx.theme().primary)
+                                                .text_color(cx.theme().primary)
+                                        })
+                                        .when(!is_sel, |s| {
+                                            s.bg(cx.theme().background)
+                                                .border_color(cx.theme().border)
+                                                .text_color(cx.theme().muted_foreground)
+                                                .hover(|s| s.text_color(cx.theme().foreground))
+                                        })
+                                        .child(format!("{desc} ({act})"))
+                                        .on_click(move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                if let Some(ActiveModal::ListEditor { selected_action, custom_action_input, .. }) = &mut this.active_modal {
+                                                    *selected_action = act_str.clone();
+                                                    custom_action_input.update(cx, |inp, cx| {
+                                                        inp.set_value(&act_str, window, cx);
+                                                    });
+                                                    cx.notify();
+                                                }
+                                            });
+                                        })
+                                }))
+                        )
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .child(Input::new(new_item_input).small())
+                )
+                .child(
+                    Button::new("add-generic-item-btn")
+                        .primary()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("항목 추가")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
+                                let val = new_item_input.read(cx).value().to_string();
+                                if !val.trim().is_empty() {
+                                    items.push(val.trim().to_string());
+                                    new_item_input.update(cx, |inp, cx| {
+                                        inp.set_value("", window, cx);
+                                    });
+                                    cx.notify();
+                                }
+                            }
+                        }))
+                )
+                .into_any_element()
+        };
+
+        let footer = h_flex()
+            .items_center()
+            .justify_end()
+            .gap_2()
+            .pt_3()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("cancel-list-modal")
+                    .ghost()
+                    .small()
+                    .label("취소")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active_modal = None;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("apply-list-modal")
+                    .primary()
+                    .small()
+                    .icon(IconName::Check)
+                    .label("적용하기")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(ActiveModal::ListEditor { key, items, .. }) = &this.active_modal {
+                            let k = *key;
+                            let items_clone = items.clone();
+                            this.file.set_all(k, &items_clone);
+                            this.active_modal = None;
+                            this.notice = Some(format!("'{k}' 설정이 반영되었습니다."));
+                            cx.notify();
+                        }
+                    })),
+            );
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(cx.theme().background.opacity(0.8))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .w(px(640.))
+                    .max_h(px(580.))
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .p_4()
+                    .gap_3()
+                    .child(header)
+                    .child(items_list)
+                    .child(add_section)
+                    .child(footer)
+            )
+            .into_any_element()
+    }
+
+    fn render_diff_modal(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let diff = compute_line_diff(&self.original, &self.file.render());
+
+        let diff_body = div()
+            .max_h(px(380.))
+            .overflow_y_scrollbar()
+            .p_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted.opacity(0.15))
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .children(diff.into_iter().enumerate().map(|(ix, line)| {
+                        match line {
+                            DiffLine::Same(text) => div()
+                                .id(format!("diff-same-{ix}"))
+                                .px_2()
+                                .py(px(1.))
+                                .font_family("Menlo")
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("  {text}")),
+                            DiffLine::Added(text) => div()
+                                .id(format!("diff-add-{ix}"))
+                                .px_2()
+                                .py(px(1.))
+                                .rounded_sm()
+                                .bg(cx.theme().success.opacity(0.15))
+                                .text_color(cx.theme().success)
+                                .font_family("Menlo")
+                                .font_semibold()
+                                .text_xs()
+                                .child(format!("+ {text}")),
+                            DiffLine::Removed(text) => div()
+                                .id(format!("diff-rem-{ix}"))
+                                .px_2()
+                                .py(px(1.))
+                                .rounded_sm()
+                                .bg(cx.theme().warning.opacity(0.15))
+                                .text_color(cx.theme().warning)
+                                .font_family("Menlo")
+                                .font_semibold()
+                                .text_xs()
+                                .child(format!("- {text}")),
+                        }
+                    }))
+            );
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(cx.theme().background.opacity(0.8))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .w(px(680.))
+                    .max_h(px(580.))
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .p_4()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .pb_2()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(Icon::new(IconName::FileText).small().text_color(cx.theme().primary))
+                                    .child(div().text_base().font_semibold().child("변경 사항 미리보기 (Diff)")),
+                            )
+                            .child(
+                                Button::new("close-diff")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::X)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_modal = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(diff_body)
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .pt_2()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Button::new("cancel-diff-btn")
+                                    .ghost()
+                                    .small()
+                                    .label("닫기")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_modal = None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("save-diff-btn")
+                                    .primary()
+                                    .small()
+                                    .icon(IconName::Check)
+                                    .label("이대로 저장")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.save(cx);
+                                        this.active_modal = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+            )
+            .into_any_element()
+    }
+}
+
+/// Parse `#rgb` / `#rrggbb` / X11 hex strings accepted by Ghostty into Hsla,
+/// so the color picker can be seeded with the file's current value.
+fn parse_hex_to_hsla(s: &str) -> Option<gpui_kit::Hsla> {
+    let h = s.trim().strip_prefix('#')?;
+    let (r, g, b) = match h.len() {
+        3 => (
+            u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?,
+            u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?,
+            u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?,
+        ),
+        6 => (
+            u8::from_str_radix(&h[0..2], 16).ok()?,
+            u8::from_str_radix(&h[2..4], 16).ok()?,
+            u8::from_str_radix(&h[4..6], 16).ok()?,
+        ),
+        _ => return None,
+    };
+    Some(
+        gpui_kit::Rgba {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        }
+        .into(),
+    )
+}
+
+fn value_widget(
+    this: &mut SettingsView,
+    opt: &'static Opt,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    match opt.kind {
+        Kind::Bool => {
+            let on = matches!(this.file.get(opt.key).as_deref(), Some("true"));
+            let view = cx.entity();
+            let key = opt.key;
+            Switch::new(opt.key)
+                .checked(on)
+                .on_change(move |&value, _, cx| {
+                    view.update(cx, |this, cx| {
+                        if value {
+                            this.file.set(key, "true");
+                        } else {
+                            this.file.set(key, "false");
+                        }
+                        this.notice = None;
+                        cx.notify();
+                    });
+                })
+                .into_any_element()
+        }
+        Kind::Enum(items) => {
+            if !this.selects.contains_key(opt.key) {
+                let items_vec: Vec<SharedString> =
+                    items.iter().map(|s| s.to_string().into()).collect();
+                let current = this.file.get(opt.key);
+                let selected = current
+                    .as_ref()
+                    .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
+                    .map(IndexPath::new);
+                let state = cx.new(|cx| {
+                    SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
+                });
+                let key = opt.key;
+                cx.subscribe(&state, move |this, _, event, cx| {
+                    let SelectEvent::Confirm(value) = event;
+                    match value {
+                        Some(v) => this.file.set(key, v.as_ref()),
+                        None => this.file.remove(key),
+                    }
+                    this.notice = None;
+                    cx.notify();
+                })
+                .detach();
+                this.selects.insert(opt.key, state);
+            }
+            let state = this.selects.get(opt.key).unwrap();
+            div()
+                .max_w(px(260.))
+                .child(Select::new(state).small())
+                .into_any_element()
+        }
+        Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
+            if !this.text_inputs.contains_key(opt.key) {
+                let seed = this.file.get(opt.key).unwrap_or_default();
+                let placeholder = if !opt.hint.is_empty() {
+                    opt.hint
+                } else {
+                    "값 입력"
+                };
+                let state = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(placeholder)
+                        .default_value(seed)
+                });
+                let key = opt.key;
+                cx.subscribe(&state, move |this, state, event, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let v = state.read(cx).value().to_string();
+                        if v.trim().is_empty() {
+                            this.file.remove(key);
+                        } else {
+                            this.file.set(key, v.trim());
+                        }
+                        this.notice = None;
+                        cx.notify();
+                    }
+                })
+                .detach();
+                this.text_inputs.insert(opt.key, state);
+            }
+            let state = this.text_inputs.get(opt.key).unwrap();
+            div()
+                .max_w(px(260.))
+                .child(Input::new(state).small())
+                .into_any_element()
+        }
+        Kind::Color { .. } => {
+            if !this.colors.contains_key(opt.key) {
+                let current = this.file.get(opt.key);
+                let state = cx.new(|cx| {
+                    let mut s = ColorPickerState::new(window, cx);
+                    if let Some(val) = current.as_deref() {
+                        if let Some(h) = parse_hex_to_hsla(val) {
+                            s.set_value(h, window, cx);
+                        }
+                    }
+                    s
+                });
+                let key = opt.key;
+                cx.subscribe(&state, move |this, _, event, cx| {
+                    if let ColorPickerEvent::Change(Some(color)) = event {
+                        let rgba = color.to_rgb();
+                        let hex = format!(
+                            "#{:02x}{:02x}{:02x}",
+                            (rgba.r * 255.0).round() as u8,
+                            (rgba.g * 255.0).round() as u8,
+                            (rgba.b * 255.0).round() as u8
+                        );
+                        this.file.set(key, &hex);
+                        this.notice = None;
+                        cx.notify();
+                    }
+                })
+                .detach();
+                this.colors.insert(opt.key, state);
+            }
+            let state = this.colors.get(opt.key).unwrap();
+            let current_text = this.file.get(opt.key).unwrap_or_default();
+            h_flex()
+                .items_center()
+                .gap_2()
+                .child(ColorPicker::new(state).small())
+                .children(if !current_text.is_empty() {
+                    Some(
+                        div()
+                            .px_2()
+                            .py(px(2.))
+                            .rounded_md()
+                            .bg(cx.theme().muted)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .text_xs()
+                            .font_family("Menlo")
+                            .text_color(cx.theme().foreground)
+                            .child(current_text),
+                    )
+                } else {
+                    None
+                })
+                .into_any_element()
+        }
+        Kind::List => {
+            let all = this.file.get_all(opt.key);
+            let key = opt.key;
+            let view = cx.entity();
+            let is_keybind = key == "keybind";
+
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    Button::new(format!("edit-{key}"))
+                        .outline()
+                        .xsmall()
+                        .icon(if is_keybind { IconName::Keyboard } else { IconName::Pencil })
+                        .label(if all.is_empty() {
+                            "항목 추가…".to_string()
+                        } else {
+                            format!("편집 ({}개)", all.len())
+                        })
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |this, cx| {
+                                let items = this.file.get_all(key);
+                                let recorder_focus = cx.focus_handle();
+                                let new_item_input = cx.new(|cx| InputState::new(window, cx).placeholder("새 항목 입력"));
+                                let custom_action_input = cx.new(|cx| InputState::new(window, cx).placeholder("직접 동작 입력 (예: new_tab)"));
+                                this.active_modal = Some(ActiveModal::ListEditor {
+                                    key,
+                                    items,
+                                    recorded_trigger: String::new(),
+                                    custom_action_input,
+                                    selected_action: "copy_to_clipboard".to_string(),
+                                    is_recording: false,
+                                    recorder_focus,
+                                    new_item_input,
+                                });
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    if all.is_empty() {
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("미설정")
+                            .into_any_element()
+                    } else if is_keybind {
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .children(all.iter().take(2).map(|item| {
+                                let parts: Vec<&str> = item.splitn(2, '=').collect();
+                                let trigger = parts[0];
+                                let action = parts.get(1).unwrap_or(&"");
+                                let pretty = ghostty_trigger_to_pretty(trigger);
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .px_2()
+                                    .py(px(1.))
+                                    .rounded_md()
+                                    .bg(cx.theme().muted)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .text_xs()
+                                    .child(
+                                        div()
+                                            .font_family("Menlo")
+                                            .font_semibold()
+                                            .child(pretty),
+                                    )
+                                    .child(Icon::new(IconName::ArrowRight).xsmall().text_color(cx.theme().muted_foreground))
+                                    .child(div().text_color(cx.theme().muted_foreground).child(action.to_string()))
+                            }))
+                            .children(if all.len() > 2 {
+                                Some(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("외 {}개", all.len() - 2)),
+                                )
+                            } else {
+                                None
+                            })
+                            .into_any_element()
+                    } else {
+                        h_flex()
+                            .gap_1()
+                            .flex_wrap()
+                            .items_center()
+                            .children(all.iter().take(3).map(|item| {
+                                div()
+                                    .px_2()
+                                    .py(px(1.))
+                                    .rounded_md()
+                                    .bg(cx.theme().muted)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .text_xs()
+                                    .font_family("Menlo")
+                                    .text_color(cx.theme().foreground)
+                                    .child(item.clone())
+                            }))
+                            .children(if all.len() > 3 {
+                                Some(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("+{}", all.len() - 3)),
+                                )
+                            } else {
+                                None
+                            })
+                            .into_any_element()
+                    },
+                )
+                .into_any_element()
+        }
+        Kind::Flags(allowed_items) => {
+            let current_flags: Vec<String> = this
+                .file
+                .get(opt.key)
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let key = opt.key;
+            let view = cx.entity();
+
+            h_flex()
+                .gap_1p5()
+                .flex_wrap()
+                .items_center()
+                .children(allowed_items.iter().map(|&flag| {
+                    let is_active = current_flags.iter().any(|f| f == flag);
+                    let view = view.clone();
+                    let current_flags = current_flags.clone();
+                    div()
+                        .id(format!("{key}-{flag}"))
+                        .cursor_pointer()
+                        .px_2()
+                        .py(px(2.))
+                        .rounded_md()
+                        .border_1()
+                        .text_xs()
+                        .font_medium()
+                        .when(is_active, |s| {
+                            s.bg(cx.theme().primary.opacity(0.12))
+                                .border_color(cx.theme().primary)
+                                .text_color(cx.theme().primary)
+                        })
+                        .when(!is_active, |s| {
+                            s.bg(cx.theme().muted)
+                                .border_color(cx.theme().border)
+                                .text_color(cx.theme().muted_foreground)
+                                .hover(|s| s.border_color(cx.theme().muted_foreground))
+                        })
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .children(if is_active {
+                                    Some(Icon::new(IconName::Check).xsmall())
+                                } else {
+                                    None
+                                })
+                                .child(flag),
+                        )
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                let mut new_flags = current_flags.clone();
+                                if is_active {
+                                    new_flags.retain(|x| x != flag);
+                                } else {
+                                    new_flags.push(flag.to_string());
+                                }
+                                if new_flags.is_empty() {
+                                    this.file.remove(key);
+                                } else {
+                                    this.file.set(key, &new_flags.join(","));
+                                }
+                                this.notice = None;
+                                cx.notify();
+                            });
+                        })
+                }))
+                .into_any_element()
+        }
+    }
+}
+
+fn row(
+    this: &mut SettingsView,
+    opt: &'static Opt,
+    is_last: bool,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    let set = this.is_set(opt);
+    let key = opt.key;
+    let doc = opt.doc;
+    let opt_id = format!("opt-{key}");
+
+    let mut row = h_flex()
+        .id(key)
+        .items_center()
+        .gap_4()
+        .px_4()
+        .py(px(10.))
+        .hover(|s| s.bg(cx.theme().muted.opacity(0.35)));
+
+    if !is_last {
+        row = row.border_b_1().border_color(cx.theme().border.opacity(0.6));
+    }
+
+    let action_lane = if set {
+        let key2 = opt.key;
+        let view = cx.entity();
+        div().w(px(36.)).flex().justify_center().child(
+            Button::new(format!("reset-{key2}"))
+                .ghost()
+                .xsmall()
+                .icon(IconName::RotateCcw)
+                .tooltip("기본값으로 되돌리기")
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |this, cx| this.reset_key(key2, cx));
+                }),
+        )
+    } else {
+        div().w(px(36.))
+    };
+
+    row.child(
+        v_flex()
+            .id(opt_id)
+            .w(px(250.))
+            .gap_0()
+            .tooltip(move |window, cx| Tooltip::new(doc).build(window, cx))
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_medium()
+                            .text_color(cx.theme().foreground)
+                            .child(opt.label),
+                    )
+                    .children(if !opt.platform.is_empty() {
+                        Some(
+                            div()
+                                .text_xs()
+                                .px_1p5()
+                                .py(px(1.))
+                                .rounded_md()
+                                .bg(cx.theme().muted)
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .text_color(cx.theme().muted_foreground)
+                                .font_family("Menlo")
+                                .child(opt.platform),
+                        )
+                    } else {
+                        None
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .font_family("Menlo")
+                    .text_color(cx.theme().muted_foreground)
+                    .child(key),
+            ),
+    )
+    .child(
+        div()
+            .flex_1()
+            .child(value_widget(this, opt, window, cx)),
+    )
+    .child(
+        div()
+            .w(px(72.))
+            .child(if set {
+                div()
+                    .px_2()
+                    .py(px(2.))
+                    .rounded_full()
+                    .bg(cx.theme().primary.opacity(0.12))
+                    .text_color(cx.theme().primary)
+                    .text_xs()
+                    .font_medium()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(5.)).rounded_full().bg(cx.theme().primary))
+                    .child("설정됨")
+                    .into_any_element()
+            } else {
+                div()
+                    .px_2()
+                    .py(px(2.))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("기본값")
+                    .into_any_element()
+            }),
+    )
+    .child(action_lane)
+    .into_any_element()
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty();
+
+        let short_path = self
+            .path
+            .strip_prefix(std::env::var("HOME").unwrap_or_default())
+            .map(|p| format!("~/{}", p.display()))
+            .unwrap_or_else(|_| self.path.display().to_string());
+        let full_path = self.path.display().to_string();
 
         let titlebar = TitleBar::new()
             .child(
                 h_flex()
                     .gap_2()
-                    .child("Ghostty 설정")
-                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                        self.path
-                            .strip_prefix(std::env::var("HOME").unwrap_or_default())
-                            .map(|p| format!("~{}", p.display()))
-                            .unwrap_or_else(|_| self.path.display().to_string()),
-                    )),
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .size(px(22.))
+                                    .rounded_md()
+                                    .bg(cx.theme().primary)
+                                    .text_color(cx.theme().primary_foreground)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(Icon::new(IconName::Terminal).xsmall()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("Ghostty"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("/"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_medium()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("설정"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("titlebar-path")
+                            .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .px_2()
+                                    .py(px(2.))
+                                    .rounded_md()
+                                    .bg(cx.theme().muted)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .child(Icon::new(IconName::FileText).xsmall().text_color(cx.theme().muted_foreground))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_family("Menlo")
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(short_path),
+                                    ),
+                            ),
+                    ),
             )
             .child(
                 h_flex()
                     .gap_2()
+                    .items_center()
                     .child(
-                        Button::new("revert")
+                        Button::new("reload")
+                            .ghost()
                             .small()
-                            .label("되돌리기")
-                            .disabled(!dirty)
+                            .icon(IconName::RefreshCw)
+                            .tooltip("파일 다시 불러오기")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if this.dirty() {
-                                    this.revert(cx);
-                                }
+                                this.revert(cx);
                             })),
                     )
                     .child(
-                        Button::new("save")
-                            .small()
-                            .primary()
-                            .label(if dirty { "저장 ●" } else { "저장" })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.dirty() {
+                        if dirty {
+                            Button::new("revert")
+                                .outline()
+                                .small()
+                                .label("변경 취소")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.revert(cx);
+                                }))
+                        } else {
+                            Button::new("revert")
+                                .ghost()
+                                .small()
+                                .label("변경 취소")
+                                .disabled(true)
+                        },
+                    )
+                    .child(
+                        if dirty {
+                            Button::new("diff")
+                                .outline()
+                                .small()
+                                .icon(IconName::FileText)
+                                .label("변경 미리보기")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.active_modal = Some(ActiveModal::DiffViewer);
+                                    cx.notify();
+                                }))
+                        } else {
+                            Button::new("diff")
+                                .ghost()
+                                .small()
+                                .icon(IconName::FileText)
+                                .label("변경 미리보기")
+                                .disabled(true)
+                        },
+                    )
+                    .child(
+                        if dirty {
+                            Button::new("save")
+                                .primary()
+                                .small()
+                                .icon(IconName::Check)
+                                .label("저장")
+                                .on_click(cx.listener(|this, _, _, cx| {
                                     this.save(cx);
-                                }
-                            })),
+                                }))
+                        } else {
+                            Button::new("save")
+                                .outline()
+                                .small()
+                                .icon(IconName::Check)
+                                .label("저장됨")
+                                .disabled(true)
+                        },
                     ),
             );
 
@@ -254,13 +1600,21 @@ impl Render for SettingsView {
                 .count();
             let selected = self.search.is_empty() && i == self.category;
             let view = view.clone();
-            // Keep counts neutral: a number needs no semantic Badge variant.
             SidebarMenuItem::new(cat.label)
+                .icon(category_icon(i))
                 .active(selected)
-                .suffix(move |_, _| {
-                    // Neutral count: a number does not earn a Badge variant.
+                .suffix(move |_, cx| {
                     if set > 0 {
-                        div().text_sm().child(set.to_string()).into_any_element()
+                        div()
+                            .px_1p5()
+                            .py(px(1.))
+                            .rounded_full()
+                            .text_xs()
+                            .font_medium()
+                            .bg(cx.theme().primary.opacity(0.12))
+                            .text_color(cx.theme().primary)
+                            .child(set.to_string())
+                            .into_any_element()
                     } else {
                         div().into_any_element()
                     }
@@ -272,189 +1626,309 @@ impl Render for SettingsView {
                     });
                 })
         }));
+
         let sidebar = Sidebar::new("nav")
             .collapsible(false)
-            .header(Input::new(&self.search_input).small())
+            .header(
+                Input::new(&self.search_input)
+                    .small()
+                    .cleanable(true)
+                    .prefix(Icon::new(IconName::Search).small().text_color(cx.theme().muted_foreground)),
+            )
             .child(menu);
 
         let heading = if self.search.is_empty() {
             let cat = &CATEGORIES[self.category];
-            (cat.label.to_string(), cat.desc.to_string())
+            (cat.label.to_string(), cat.desc.to_string(), Some(category_icon(self.category)))
         } else {
             (
-                format!("검색 결과 {}개", self.visible_opts().len()),
-                "키, 이름, 설명에서 찾습니다.".to_string(),
+                format!("검색 결과 ({}개)", self.visible_opts().len()),
+                "키, 이름, 설명에서 일치하는 옵션입니다.".to_string(),
+                Some(IconName::Search),
             )
         };
-        let counts = format!("{}/{} 설정됨", self.set_count(), self.visible_opts().len());
-        let header = v_flex()
-            .gap_1()
+
+        let header = h_flex()
+            .items_center()
+            .justify_between()
+            .pb_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(
                 h_flex()
-                    .gap_2()
-                    .items_baseline()
-                    .child(div().text_lg().child(heading.0))
+                    .items_center()
+                    .gap_3()
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(counts),
+                            .size(px(36.))
+                            .rounded_lg()
+                            .bg(cx.theme().muted)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .text_color(cx.theme().foreground)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(heading.2.unwrap_or(IconName::SlidersHorizontal)).small()),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_semibold()
+                                    .child(heading.0),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(heading.1),
+                            ),
                     ),
             )
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(heading.1),
-            )
-            .child(
-                // Column titles share the row grid below: one lane, one title.
                 h_flex()
-                    .gap_3()
-                    .pt_2()
-                    .pb_1()
-                    .border_b_1()
+                    .gap_1p5()
+                    .items_center()
+                    .px_2p5()
+                    .py_1()
+                    .rounded_full()
+                    .bg(cx.theme().muted)
+                    .border_1()
                     .border_color(cx.theme().border)
                     .child(
                         div()
-                            .w(px(240.))
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("옵션"),
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(if self.set_count() > 0 {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().muted_foreground
+                            }),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("값"),
-                    )
-                    .child(
-                        div()
-                            .w(px(72.))
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("상태"),
-                    )
-                    .child(div().w(px(56.))),
+                            .text_xs()
+                            .font_medium()
+                            .text_color(cx.theme().foreground)
+                            .child(format!("{}/{} 설정됨", self.set_count(), self.visible_opts().len())),
+                    ),
             );
 
-        let hover_bg = cx.theme().muted;
-        let border = cx.theme().border;
-        let list = if self.visible_opts().is_empty() {
+        let total_visible = self.visible_opts().len();
+        let list = if total_visible == 0 {
             v_flex()
                 .flex_1()
                 .items_center()
                 .justify_center()
                 .gap_3()
                 .py_16()
-                .child(div().text_color(cx.theme().muted_foreground).child("일치하는 옵션이 없습니다."))
+                .child(
+                    div()
+                        .size(px(48.))
+                        .rounded_full()
+                        .bg(cx.theme().muted)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Search).large().text_color(cx.theme().muted_foreground)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .text_color(cx.theme().foreground)
+                        .child("일치하는 옵션이 없습니다"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("다른 키워드로 검색하거나 검색어를 지워보세요."),
+                )
                 .child(
                     Button::new("clear-search")
-                        .ghost()
+                        .outline()
+                        .small()
+                        .icon(IconName::X)
                         .label("검색어 지우기")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.clear_search(window, cx);
                         })),
                 )
         } else {
-            v_flex().children(self.visible_opts().into_iter().map(|opt| {
-                let value = if opt.repeatable() {
-                    let all = self.file.get_all(opt.key);
-                    if all.is_empty() {
-                        "미설정".to_string()
-                    } else {
-                        all.join(" · ")
-                    }
-                } else {
-                    self.file.get(opt.key).unwrap_or_else(|| "기본값".to_string())
-                };
-                let set = self.is_set(opt);
-                let clickable = matches!(opt.kind, Kind::Bool | Kind::Enum(_));
-                let key = opt.key;
-                let doc = opt.doc;
-
-                let mut row = h_flex()
-                    .id(key)
-                    .items_center()
-                    .gap_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        v_flex()
-                            .w(px(240.))
-                            .gap_0()
-                            .child(Label::new(opt.label.to_string()))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!("`{key}`")),
-                            ),
-                    )
-                    .child(div().flex_1().child(value))
-                    .child(div().w(px(72.)).text_sm().child(if set {
-                        "설정됨"
-                    } else {
-                        "기본값"
-                    }))
-                    .child(
-                        div().w(px(56.)).child(if set {
-                            let key2 = opt.key;
-                            Button::new(format!("reset-{key2}"))
-                                .outline()
-                                .xsmall()
-                                .label("해제")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.reset_key(key2, cx);
-                                }))
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }),
-                    );
-                if clickable {
-                    row = row
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(hover_bg))
-                        .tooltip(move |window, cx| Tooltip::new(doc).build(window, cx))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.cycle_value(key, cx);
-                        }));
-                }
-                row
-            }))
+            let opts = self.visible_opts();
+            let total = opts.len();
+            v_flex()
+                .w_full()
+                .rounded_xl()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().background)
+                .overflow_hidden()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_4()
+                        .px_4()
+                        .py(px(8.))
+                        .bg(cx.theme().muted.opacity(0.35))
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .w(px(250.))
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("옵션"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("값"),
+                        )
+                        .child(
+                            div()
+                                .w(px(72.))
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("상태"),
+                        )
+                        .child(div().w(px(36.))),
+                )
+                .children(opts.into_iter().enumerate().map(|(i, opt)| {
+                    row(self, opt, i == total - 1, window, cx)
+                }))
         };
 
         let content = v_flex()
             .flex_1()
             .min_w_0()
-            .child(div().px_4().pt_4().child(header))
+            .child(div().px_6().pt_5().pb_3().child(header))
             .child(
                 div()
                     .flex_1()
                     .overflow_y_scrollbar()
                     .id("option-list")
-                    .px_4()
-                    .pb_4()
+                    .px_6()
+                    .pb_6()
                     .child(list),
             );
 
         let status = StatusBar::new()
-            .left(div().text_sm().child(
-                self.notice
-                    .clone()
-                    .unwrap_or_else(|| "클릭으로 켜기/끄기 · / 로 검색 이동 · ⌘S 저장".to_string()),
-            ))
-            .right(div().text_sm().child(if dirty {
-                "● 저장되지 않은 변경"
-            } else {
-                "○ 변경 없음"
-            }));
+            .left(
+                if let Some(notice) = &self.notice {
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(Icon::new(IconName::RefreshCw).xsmall().text_color(cx.theme().primary))
+                        .child(notice.clone())
+                } else {
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .bg(cx.theme().muted)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .font_family("Menlo")
+                                        .child("/"),
+                                )
+                                .child("검색 포커스"),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .bg(cx.theme().muted)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .font_family("Menlo")
+                                        .child("⌘S"),
+                                )
+                                .child("저장"),
+                        )
+                },
+            )
+            .right(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .text_xs()
+                    .font_medium()
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(if dirty {
+                                cx.theme().warning
+                            } else {
+                                cx.theme().success
+                            }),
+                    )
+                    .child(if dirty {
+                        "저장되지 않은 변경사항"
+                    } else {
+                        "동기화됨"
+                    }),
+            );
 
-        v_flex()
+        let modal = self.active_modal.take();
+        let modal_overlay = match &modal {
+            Some(ActiveModal::ListEditor {
+                key,
+                items,
+                recorded_trigger,
+                selected_action,
+                is_recording,
+                recorder_focus,
+                custom_action_input,
+                new_item_input,
+            }) => Some(self.render_list_editor_modal(
+                key,
+                items,
+                recorded_trigger,
+                selected_action,
+                *is_recording,
+                recorder_focus,
+                custom_action_input,
+                new_item_input,
+                cx,
+            )),
+            Some(ActiveModal::DiffViewer) => Some(self.render_diff_modal(cx)),
+            None => None,
+        };
+        self.active_modal = modal;
+
+        let mut root = v_flex()
             .size_full()
+            .relative()
             .key_context("Settings")
             .on_action(cx.listener(Self::commit_save))
             .on_action(cx.listener(Self::focus_search))
@@ -462,6 +1936,44 @@ impl Render for SettingsView {
             .text_color(cx.theme().foreground)
             .child(titlebar)
             .child(h_flex().items_stretch().flex_1().child(sidebar).child(content))
-            .child(status)
+            .child(status);
+
+        if let Some(overlay) = modal_overlay {
+            root = root.child(overlay);
+        }
+
+        root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_hex_colors() {
+        assert!(parse_hex_to_hsla("#fff").is_some());
+        assert!(parse_hex_to_hsla("#ffffff").is_some());
+        assert!(parse_hex_to_hsla("#123456").is_some());
+        assert!(parse_hex_to_hsla("not-a-color").is_none());
+        assert!(parse_hex_to_hsla("#abcd").is_none());
+        assert!(parse_hex_to_hsla("#xyz").is_none());
+    }
+
+    #[test]
+    fn test_ghostty_trigger_formatting() {
+        assert_eq!(ghostty_trigger_to_pretty("super+c"), "⌘C");
+        assert_eq!(ghostty_trigger_to_pretty("super+shift+k"), "⌘⇧K");
+        assert_eq!(ghostty_trigger_to_pretty("ctrl+tab"), "⌃⇥");
+    }
+
+    #[test]
+    fn test_compute_line_diff() {
+        let old = "a\nb\nc\n";
+        let new = "a\nb2\nc\nd\n";
+        let diff = compute_line_diff(old, new);
+        assert!(diff.iter().any(|d| matches!(d, DiffLine::Added(s) if s == "b2")));
+        assert!(diff.iter().any(|d| matches!(d, DiffLine::Removed(s) if s == "b")));
+        assert!(diff.iter().any(|d| matches!(d, DiffLine::Added(s) if s == "d")));
     }
 }

@@ -226,6 +226,7 @@ impl LineFile {
     /// Grows by inserting after the last existing line, shrinks by deleting
     /// surplus lines from the end of the group. Lines the user grouped
     /// elsewhere in the file keep their position.
+    #[allow(dead_code)]
     pub fn set_all(&mut self, key: &str, values: &[String]) {
         let idxs = self.indices_of(key);
 
