@@ -1573,15 +1573,14 @@ fn render_stepper_widget(
         })
         .into_any_element()
 }
-
 fn render_input_with_chips(
     state: &Entity<InputState>,
     key: &'static str,
+    current_val: &str,
     chips: &'static [(&'static str, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
-    let current_val = view.read(cx).file.get(key).unwrap_or_default();
     h_flex()
         .gap_2()
         .items_center()
@@ -1891,6 +1890,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("/bin/zsh", "/bin/zsh"),
                             ("/bin/bash", "/bin/bash"),
@@ -1906,6 +1906,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("끔 (false)", "false"),
                             ("은은하게 (10)", "10"),
@@ -1923,6 +1924,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("10MB", "10000000"),
                             ("50MB", "50000000"),
@@ -1940,6 +1942,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("0", "0"),
                             ("4", "4"),
@@ -1957,6 +1960,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("1x (느림)", "1"),
                             ("2x", "2"),
@@ -1972,6 +1976,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[
                             ("-1", "-1"),
                             ("0", "0"),
@@ -1990,6 +1995,7 @@ fn value_widget(
                     render_input_with_chips(
                         &state,
                         key,
+                        &current_val,
                         &[("기본값 복원", "\\t'\"│`|:;,()[]{}<>$")],
                         cx.entity(),
                         cx,
