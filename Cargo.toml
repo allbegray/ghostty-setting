@@ -1,0 +1,9 @@
+[package]
+name = "ghostty-setting"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+egui_extras = "0.36.2"
