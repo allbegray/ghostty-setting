@@ -9,7 +9,7 @@ fn main() {
     let path = std::env::args().nth(1).map(std::path::PathBuf::from);
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             // MUST be first, before any component is used.
             gpui_kit::init(cx);
