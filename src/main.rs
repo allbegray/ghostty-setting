@@ -1,10 +1,9 @@
 mod app;
 mod config;
 
-use app::SettingsView;
-use gpui_kit::AppContext as _;
+use app::{FocusSearch, Save, SettingsView};
 use gpui_kit::component::TitleBar;
-use gpui_kit::{Bounds, WindowBounds, WindowOptions, px, size};
+use gpui_kit::{AppContext as _, Bounds, KeyBinding, WindowBounds, WindowOptions, px, size};
 
 fn main() {
     let path = std::env::args().nth(1).map(std::path::PathBuf::from);
@@ -19,11 +18,19 @@ fn main() {
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // Physical window boundary: the documented minimum at
+                    // which the sidebar + lanes still work.
+                    window_min_size: Some(size(px(880.), px(600.))),
                     ..TitleBar::window_options()
                 },
                 cx,
                 |window, cx| cx.new(|cx| SettingsView::new(window, cx, path.clone())),
             )
             .expect("failed to open window");
+
+            cx.bind_keys([
+                KeyBinding::new("cmd-s", Save, Some("Settings")),
+                KeyBinding::new("/", FocusSearch, Some("Settings")),
+            ]);
         });
 }
