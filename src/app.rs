@@ -528,6 +528,39 @@ impl SettingsView {
             .count()
     }
 
+    fn get_or_create_input(
+        &mut self,
+        key: &'static str,
+        hint: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if !self.text_inputs.contains_key(key) {
+            let seed = self.file.get(key).unwrap_or_default();
+            let placeholder = if !hint.is_empty() { hint } else { "값 입력" };
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(seed)
+            });
+            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let v = state.read(cx).value().to_string();
+                    if v.trim().is_empty() {
+                        this.file.remove(key);
+                    } else {
+                        this.file.set(key, v.trim());
+                    }
+                    this.notice = None;
+                    cx.notify();
+                }
+            });
+            self._subscriptions.push(sub);
+            self.text_inputs.insert(key, state);
+        }
+        self.text_inputs.get(key).unwrap().clone()
+    }
+
     fn render_list_editor_modal(
         &self,
         key: &'static str,
@@ -545,12 +578,13 @@ impl SettingsView {
         let is_keybind = key == "keybind";
         let is_font = key == "font-family";
         let is_config = key == "config-file";
+        let is_feature = key == "font-feature";
         let opt_label = lookup(key).map(|o| o.label).unwrap_or(key);
         let view = cx.entity();
 
         let icon = if is_keybind {
             IconName::Keyboard
-        } else if is_font {
+        } else if is_font || is_feature {
             IconName::Type
         } else if is_config {
             IconName::FileText
@@ -562,6 +596,8 @@ impl SettingsView {
             "키 바인딩 설정 (`keybind`)".to_string()
         } else if is_font {
             "글꼴 우선순위 설정 (`font-family`)".to_string()
+        } else if is_feature {
+            "OpenType 기능 설정 (`font-feature`)".to_string()
         } else if is_config {
             "추가 설정 파일 불러오기 (`config-file`)".to_string()
         } else {
@@ -572,12 +608,13 @@ impl SettingsView {
             "단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다."
         } else if is_font {
             "시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다."
+        } else if is_feature {
+            "폰트의 프로그래밍 합자(Ligatures) 및 특수 글리프 기능을 켜고 끕니다."
         } else if is_config {
             "파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다."
         } else {
             "설정 파일에 반복 지정되는 항목 목록을 관리합니다."
         };
-
         let header = h_flex()
             .items_center()
             .justify_between()
@@ -1063,6 +1100,94 @@ impl SettingsView {
                         }))
                 )
                 .into_any_element()
+        } else if is_feature {
+            const POPULAR_FEATURES: &[(&str, &str)] = &[
+                ("-calt", "합자 끄기"),
+                ("+calt", "합자 켜기"),
+                ("+liga", "기본 합자"),
+                ("+dlig", "임의 합자"),
+                ("+zero", "슬래시 0"),
+                ("+ss01", "스타일셋 1"),
+                ("+ss02", "스타일셋 2"),
+                ("+cv01", "문자변형 1"),
+            ];
+            let view = view.clone();
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.15))
+                .child(
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 OpenType 기능 추가")
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(Input::new(new_item_input).small())
+                        )
+                        .child(
+                            Button::new("add-feature-btn")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("추가")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
+                                        let val = new_item_input.read(cx).value().to_string();
+                                        if !val.trim().is_empty() {
+                                            items.push(val.trim().to_string());
+                                            new_item_input.update(cx, |inp, cx| {
+                                                inp.set_value("", window, cx);
+                                            });
+                                            cx.notify();
+                                        }
+                                    }
+                                }))
+                        )
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 기능 빠른 추가 (1클릭):"))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .flex_wrap()
+                                .children(POPULAR_FEATURES.iter().map(|(feat, desc)| {
+                                    let view = view.clone();
+                                    div()
+                                        .id(format!("pop-feat-{feat}"))
+                                        .cursor_pointer()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .bg(cx.theme().background)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .hover(|s| s.text_color(cx.theme().foreground))
+                                        .child(format!("{feat} ({desc})"))
+                                        .on_click(move |_, _, cx| {
+                                            view.update(cx, |this, cx| {
+                                                if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
+                                                    if !items.iter().any(|f| f == feat) {
+                                                        items.push(feat.to_string());
+                                                        cx.notify();
+                                                    }
+                                                }
+                                            });
+                                        })
+                                }))
+                        )
+                )
+                .into_any_element()
         } else {
             h_flex()
                 .gap_2()
@@ -1311,6 +1436,201 @@ fn parse_hex_to_hsla(s: &str) -> Option<gpui_kit::Hsla> {
     )
 }
 
+fn render_stepper_widget(
+    _this: &mut SettingsView,
+    key: &'static str,
+    val_str: &str,
+    default_val: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    is_float: bool,
+    unit: &'static str,
+    presets: &'static [(&'static str, &'static str)],
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    let cur: f64 = val_str.parse().unwrap_or(default_val);
+    let view = cx.entity();
+
+    let dec_next = (cur - step).max(min);
+    let dec_str = if is_float {
+        format!("{dec_next:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{}", dec_next as i64)
+    };
+
+    let inc_next = (cur + step).min(max);
+    let inc_str = if is_float {
+        format!("{inc_next:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{}", inc_next as i64)
+    };
+
+    let view_dec = view.clone();
+    let view_inc = view.clone();
+
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    Button::new(format!("dec-{key}"))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Minus)
+                        .disabled(cur <= min)
+                        .on_click(move |_, _, cx| {
+                            view_dec.update(cx, |this, cx| {
+                                this.file.set(key, &dec_str);
+                                this.text_inputs.remove(key);
+                                this.notice = None;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    div()
+                        .min_w(px(64.))
+                        .px_2()
+                        .py(px(2.))
+                        .rounded_md()
+                        .bg(cx.theme().muted)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .font_family("Menlo")
+                        .font_semibold()
+                        .flex()
+                        .justify_center()
+                        .child(if val_str.is_empty() {
+                            "기본값".to_string()
+                        } else if unit.is_empty() {
+                            val_str.to_string()
+                        } else {
+                            format!("{val_str} {unit}")
+                        }),
+                )
+                .child(
+                    Button::new(format!("inc-{key}"))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Plus)
+                        .disabled(cur >= max)
+                        .on_click(move |_, _, cx| {
+                            view_inc.update(cx, |this, cx| {
+                                this.file.set(key, &inc_str);
+                                this.text_inputs.remove(key);
+                                this.notice = None;
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .children(if !presets.is_empty() {
+            Some(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .children(presets.iter().map(|(label, target)| {
+                        let is_active = val_str == *target;
+                        let view = view.clone();
+                        let target_str = target.to_string();
+                        div()
+                            .id(format!("{key}-preset-{label}"))
+                            .cursor_pointer()
+                            .px_1p5()
+                            .py(px(1.))
+                            .rounded_sm()
+                            .border_1()
+                            .text_xs()
+                            .when(is_active, |s| {
+                                s.bg(cx.theme().primary.opacity(0.12))
+                                    .border_color(cx.theme().primary)
+                                    .text_color(cx.theme().primary)
+                            })
+                            .when(!is_active, |s| {
+                                s.bg(cx.theme().background)
+                                    .border_color(cx.theme().border)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .hover(|s| s.text_color(cx.theme().foreground))
+                            })
+                            .child(*label)
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.file.set(key, &target_str);
+                                    this.text_inputs.remove(key);
+                                    this.notice = None;
+                                    cx.notify();
+                                });
+                            })
+                    }))
+            )
+        } else {
+            None
+        })
+        .into_any_element()
+}
+
+fn render_input_with_chips(
+    state: &Entity<InputState>,
+    key: &'static str,
+    chips: &'static [(&'static str, &'static str)],
+    view: Entity<SettingsView>,
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    let current_val = view.read(cx).file.get(key).unwrap_or_default();
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .max_w(px(180.))
+                .child(Input::new(state).small())
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .flex_wrap()
+                .children(chips.iter().map(|(label, target)| {
+                    let is_active = current_val == *target;
+                    let view = view.clone();
+                    let target_str = target.to_string();
+                    div()
+                        .id(format!("{key}-chip-{label}"))
+                        .cursor_pointer()
+                        .px_1p5()
+                        .py(px(1.))
+                        .rounded_sm()
+                        .border_1()
+                        .text_xs()
+                        .when(is_active, |s| {
+                            s.bg(cx.theme().primary.opacity(0.12))
+                                .border_color(cx.theme().primary)
+                                .text_color(cx.theme().primary)
+                        })
+                        .when(!is_active, |s| {
+                            s.bg(cx.theme().background)
+                                .border_color(cx.theme().border)
+                                .text_color(cx.theme().muted_foreground)
+                                .hover(|s| s.text_color(cx.theme().foreground))
+                        })
+                        .child(*label)
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.file.set(key, &target_str);
+                                this.text_inputs.remove(key);
+                                this.notice = None;
+                                cx.notify();
+                            });
+                        })
+                }))
+        )
+        .into_any_element()
+}
+
 fn value_widget(
     this: &mut SettingsView,
     opt: &'static Opt,
@@ -1369,103 +1689,319 @@ fn value_widget(
                 .into_any_element()
         }
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
-            if !this.text_inputs.contains_key(opt.key) {
-                let seed = this.file.get(opt.key).unwrap_or_default();
-                let placeholder = if !opt.hint.is_empty() {
-                    opt.hint
-                } else {
-                    "값 입력"
-                };
-                let state = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(placeholder)
-                        .default_value(seed)
-                });
-                let key = opt.key;
-                cx.subscribe(&state, move |this, state, event, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        let v = state.read(cx).value().to_string();
-                        if v.trim().is_empty() {
-                            this.file.remove(key);
-                        } else {
-                            this.file.set(key, v.trim());
-                        }
-                        this.notice = None;
-                        cx.notify();
-                    }
-                })
-                .detach();
-                this.text_inputs.insert(opt.key, state);
-            }
-            let state = this.text_inputs.get(opt.key).unwrap();
-            if opt.key == "working-directory" {
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .w(px(200.))
-                            .child(Input::new(state).small())
-                    )
-                    .child(
-                        Button::new("browse-working-dir")
-                            .outline()
-                            .small()
-                            .icon(IconName::Folder)
-                            .label("찾아보기")
-                            .tooltip("시스템 폴더 선택기로 디렉터리 찾아보기")
-                            .on_click(cx.listener(|_this, _, _, cx| {
-                                cx.spawn(async move |this, cx| {
-                                    let result = cx.background_spawn(async move {
-                                        pick_folder()
-                                    }).await;
+            let key = opt.key;
+            let current_val = this.file.get(key).unwrap_or_default();
 
-                                    this.update(cx, |this, cx| {
-                                        if let Some(path) = result {
-                                            this.file.set("working-directory", &path);
-                                            this.text_inputs.remove("working-directory");
-                                            this.notice = None;
-                                            cx.notify();
-                                        }
-                                    }).ok();
-                                }).detach();
-                            }))
-                    )
-                    .into_any_element()
-            } else if opt.key == "theme" {
-                if !this.selects.contains_key("theme") {
-                    let theme_names = get_ghostty_themes();
-                    let items_vec: Vec<SharedString> = theme_names.iter().map(|s| s.clone().into()).collect();
-                    let current = this.file.get("theme");
-                    let selected = current
-                        .as_ref()
-                        .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
-                        .map(IndexPath::new);
-                    let state = cx.new(|cx| {
-                        SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
-                    });
-                    cx.subscribe(&state, move |this, _, event, cx| {
-                        let SelectEvent::Confirm(value) = event;
-                        match value {
-                            Some(v) => this.file.set("theme", v.as_ref()),
-                            None => this.file.remove("theme"),
-                        }
-                        this.notice = None;
-                        cx.notify();
-                    })
-                    .detach();
-                    this.selects.insert("theme", state);
+            match key {
+                "font-size" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    13.0,
+                    1.0,
+                    8.0,
+                    72.0,
+                    true,
+                    "pt",
+                    &[
+                        ("11", "11"),
+                        ("12", "12"),
+                        ("13", "13"),
+                        ("14", "14"),
+                        ("15", "15"),
+                        ("16", "16"),
+                        ("18", "18"),
+                        ("20", "20"),
+                    ],
+                    cx,
+                ),
+                "background-opacity" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    1.0,
+                    0.05,
+                    0.0,
+                    1.0,
+                    true,
+                    "",
+                    &[
+                        ("100%", "1.0"),
+                        ("95%", "0.95"),
+                        ("90%", "0.9"),
+                        ("85%", "0.85"),
+                        ("80%", "0.8"),
+                        ("70%", "0.7"),
+                        ("50%", "0.5"),
+                    ],
+                    cx,
+                ),
+                "cursor-opacity" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    1.0,
+                    0.1,
+                    0.0,
+                    1.0,
+                    true,
+                    "",
+                    &[
+                        ("100%", "1.0"),
+                        ("80%", "0.8"),
+                        ("60%", "0.6"),
+                        ("40%", "0.4"),
+                    ],
+                    cx,
+                ),
+                "minimum-contrast" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    1.0,
+                    0.5,
+                    1.0,
+                    21.0,
+                    true,
+                    "",
+                    &[
+                        ("1.0 (끔)", "1.0"),
+                        ("3.0 (최소)", "3.0"),
+                        ("4.5 (권장)", "4.5"),
+                        ("7.0 (강화)", "7.0"),
+                    ],
+                    cx,
+                ),
+                "window-width" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    80.0,
+                    10.0,
+                    20.0,
+                    500.0,
+                    false,
+                    "열",
+                    &[("80", "80"), ("100", "100"), ("120", "120"), ("140", "140")],
+                    cx,
+                ),
+                "window-height" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    24.0,
+                    5.0,
+                    10.0,
+                    200.0,
+                    false,
+                    "행",
+                    &[("24", "24"), ("30", "30"), ("40", "40"), ("50", "50")],
+                    cx,
+                ),
+                "font-thicken-strength" => render_stepper_widget(
+                    this,
+                    key,
+                    &current_val,
+                    0.0,
+                    16.0,
+                    0.0,
+                    255.0,
+                    false,
+                    "",
+                    &[
+                        ("0 (보통)", "0"),
+                        ("64", "64"),
+                        ("128 (중간)", "128"),
+                        ("192", "192"),
+                        ("255 (최대)", "255"),
+                    ],
+                    cx,
+                ),
+                "working-directory" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(200.))
+                                .child(Input::new(&state).small()),
+                        )
+                        .child(
+                            Button::new("browse-working-dir")
+                                .outline()
+                                .small()
+                                .icon(IconName::Folder)
+                                .label("찾아보기")
+                                .tooltip("시스템 폴더 선택기로 디렉터리 찾아보기")
+                                .on_click(cx.listener(|_this, _, _, cx| {
+                                    cx.spawn(async move |this, cx| {
+                                        let result = cx
+                                            .background_spawn(async move { pick_folder() })
+                                            .await;
+
+                                        this.update(cx, |this, cx| {
+                                            if let Some(path) = result {
+                                                this.file.set("working-directory", &path);
+                                                this.text_inputs.remove("working-directory");
+                                                this.notice = None;
+                                                cx.notify();
+                                            }
+                                        })
+                                        .ok();
+                                    })
+                                    .detach();
+                                })),
+                        )
+                        .into_any_element()
                 }
-                let theme_select = this.selects.get("theme").unwrap();
-                div()
-                    .max_w(px(260.))
-                    .child(Select::new(theme_select).small())
-                    .into_any_element()
-            } else {
-                div()
-                    .max_w(px(260.))
-                    .child(Input::new(state).small())
-                    .into_any_element()
+                "theme" => {
+                    if !this.selects.contains_key("theme") {
+                        let theme_names = get_ghostty_themes();
+                        let items_vec: Vec<SharedString> =
+                            theme_names.iter().map(|s| s.clone().into()).collect();
+                        let current = this.file.get("theme");
+                        let selected = current
+                            .as_ref()
+                            .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
+                            .map(IndexPath::new);
+                        let state = cx.new(|cx| {
+                            SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
+                        });
+                        cx.subscribe(&state, move |this, _, event, cx| {
+                            let SelectEvent::Confirm(value) = event;
+                            match value {
+                                Some(v) => this.file.set("theme", v.as_ref()),
+                                None => this.file.remove("theme"),
+                            }
+                            this.notice = None;
+                            cx.notify();
+                        })
+                        .detach();
+                        this.selects.insert("theme", state);
+                    }
+                    let theme_select = this.selects.get("theme").unwrap();
+                    div()
+                        .max_w(px(260.))
+                        .child(Select::new(theme_select).small())
+                        .into_any_element()
+                }
+                "command" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("/bin/zsh", "/bin/zsh"),
+                            ("/bin/bash", "/bin/bash"),
+                            ("fish", "/opt/homebrew/bin/fish"),
+                            ("tmux", "tmux"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "background-blur" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("끔 (false)", "false"),
+                            ("은은하게 (10)", "10"),
+                            ("기본 (20)", "20"),
+                            ("강하게 (40)", "40"),
+                            ("Glass Regular", "macos-glass-regular"),
+                            ("Glass Clear", "macos-glass-clear"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "scrollback-limit" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("10MB", "10000000"),
+                            ("50MB", "50000000"),
+                            ("100MB", "100000000"),
+                            ("500MB", "500000000"),
+                            ("1GB", "1000000000"),
+                            ("무제한 (0)", "0"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "window-padding-x" | "window-padding-y" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("0", "0"),
+                            ("4", "4"),
+                            ("8", "8"),
+                            ("12", "12"),
+                            ("16", "16"),
+                            ("24", "24"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "mouse-scroll-multiplier" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("1x (느림)", "1"),
+                            ("2x", "2"),
+                            ("3x (기본)", "3"),
+                            ("5x (빠름)", "5"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "adjust-cell-width" | "adjust-cell-height" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[
+                            ("-1", "-1"),
+                            ("0", "0"),
+                            ("+1", "1"),
+                            ("+2", "2"),
+                            ("-5%", "-5%"),
+                            ("+5%", "5%"),
+                            ("+10%", "10%"),
+                        ],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                "selection-word-chars" => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    render_input_with_chips(
+                        &state,
+                        key,
+                        &[("기본값 복원", "\\t'\"│`|:;,()[]{}<>$")],
+                        cx.entity(),
+                        cx,
+                    )
+                }
+                _ => {
+                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    div()
+                        .max_w(px(260.))
+                        .child(Input::new(&state).small())
+                        .into_any_element()
+                }
             }
         }
         Kind::Color { .. } => {
