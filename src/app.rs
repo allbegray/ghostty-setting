@@ -27,7 +27,7 @@ use gpui_kit::component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex, v_flex,
     input::{Input, InputEvent, InputState, NumberInput},
-    scroll::ScrollableElement as _,
+    scroll::{ScrollableElement as _, Scrollbar, ScrollbarMode},
     select::{Select, SelectEvent, SelectState},
     searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
@@ -40,8 +40,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
-    InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions, div, px,
+    InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions,
+    div, px,
 };
 use gpui_kit::base::Disableable as _;
 
@@ -472,6 +473,7 @@ pub struct SettingsView {
     _subscriptions: Vec<Subscription>,
     active_modal: Option<ActiveModal>,
     show_preview: bool,
+    scroll_handle: ScrollHandle,
 }
 
 impl SettingsView {
@@ -500,6 +502,7 @@ impl SettingsView {
             _subscriptions: vec![subscription],
             active_modal: None,
             show_preview: true,
+            scroll_handle: ScrollHandle::default(),
         }
     }
 
@@ -3282,18 +3285,40 @@ impl Render for SettingsView {
                 }))
         };
 
+        let scroll_area = div()
+            .id("option-scroll-area")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
+            .px_6()
+            .pb_6()
+            .child(list);
+
         let content = v_flex()
             .flex_1()
             .min_w_0()
+            .h_full()
             .child(div().px_6().pt_5().pb_3().child(header))
             .child(
                 div()
                     .flex_1()
-                    .overflow_y_scrollbar()
-                    .id("option-list")
-                    .px_6()
-                    .pb_6()
-                    .child(list),
+                    .min_h_0()
+                    .relative()
+                    .child(scroll_area)
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right(px(2.))
+                            .bottom(px(6.))
+                            .w(px(10.))
+                            .child(
+                                Scrollbar::vertical(&self.scroll_handle)
+                                    .mode(ScrollbarMode::Always)
+                                    .viewport_from_layout(),
+                            ),
+                    ),
             );
 
         let status = StatusBar::new()
