@@ -14,13 +14,13 @@ fn main() {
             // MUST be first, before any component is used.
             gpui_kit::init(cx);
 
-            let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+            let bounds = Bounds::centered(None, size(px(1480.0), px(880.0)), cx);
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    // Physical window boundary: the documented minimum at
-                    // which the sidebar + lanes still work.
-                    window_min_size: Some(size(px(880.), px(600.))),
+                    // Physical window boundary: the minimum at which sidebar,
+                    // un-wrapped settings lanes, and preview panel all fit.
+                    window_min_size: Some(size(px(1180.), px(680.))),
                     ..TitleBar::window_options()
                 },
                 cx,
