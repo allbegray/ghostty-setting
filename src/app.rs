@@ -1489,7 +1489,6 @@ fn render_bounded_slider_number(
     step: f64,
     is_float: bool,
     unit: Option<&'static str>,
-    presets: &'static [(&'static str, &'static str)],
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -1542,14 +1541,13 @@ fn render_bounded_slider_number(
     }
 
     let slider_state = this.sliders.get(key).unwrap().clone();
-    let view = cx.entity();
 
     h_flex()
-        .gap_2()
+        .gap_3()
         .items_center()
         .child(
             div()
-                .w(px(140.))
+                .w(px(160.))
                 .child(Slider::new(&slider_state))
         )
         .child(
@@ -1557,49 +1555,6 @@ fn render_bounded_slider_number(
                 .w(px(110.))
                 .child(num_input)
         )
-        .children(if !presets.is_empty() {
-            Some(
-                h_flex()
-                    .gap_1()
-                    .flex_wrap()
-                    .children(presets.iter().map(|(label, target)| {
-                        let is_active = val_str == *target;
-                        let view = view.clone();
-                        let target_str = target.to_string();
-                        div()
-                            .id(format!("{key}-preset-{label}"))
-                            .cursor_pointer()
-                            .px_1p5()
-                            .py(px(1.))
-                            .rounded_sm()
-                            .border_1()
-                            .text_xs()
-                            .when(is_active, |s| {
-                                s.bg(cx.theme().primary.opacity(0.12))
-                                    .border_color(cx.theme().primary)
-                                    .text_color(cx.theme().primary)
-                            })
-                            .when(!is_active, |s| {
-                                s.bg(cx.theme().background)
-                                    .border_color(cx.theme().border)
-                                    .text_color(cx.theme().muted_foreground)
-                                    .hover(|s| s.text_color(cx.theme().foreground))
-                            })
-                            .child(*label)
-                            .on_click(move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.file.set(key, &target_str);
-                                    this.text_inputs.remove(key);
-                                    this.sliders.remove(key);
-                                    this.notice = None;
-                                    cx.notify();
-                                });
-                            })
-                    }))
-            )
-        } else {
-            None
-        })
         .into_any_element()
 }
 
@@ -1778,16 +1733,6 @@ fn value_widget(
                     1.0,
                     true,
                     Some("pt"),
-                    &[
-                        ("11", "11"),
-                        ("12", "12"),
-                        ("13", "13"),
-                        ("14", "14"),
-                        ("15", "15"),
-                        ("16", "16"),
-                        ("18", "18"),
-                        ("20", "20"),
-                    ],
                     window,
                     cx,
                 ),
@@ -1801,15 +1746,6 @@ fn value_widget(
                     0.05,
                     true,
                     None,
-                    &[
-                        ("100%", "1.0"),
-                        ("95%", "0.95"),
-                        ("90%", "0.9"),
-                        ("85%", "0.85"),
-                        ("80%", "0.8"),
-                        ("70%", "0.7"),
-                        ("50%", "0.5"),
-                    ],
                     window,
                     cx,
                 ),
@@ -1823,12 +1759,6 @@ fn value_widget(
                     0.05,
                     true,
                     None,
-                    &[
-                        ("100%", "1.0"),
-                        ("80%", "0.8"),
-                        ("60%", "0.6"),
-                        ("40%", "0.4"),
-                    ],
                     window,
                     cx,
                 ),
@@ -1842,12 +1772,6 @@ fn value_widget(
                     0.5,
                     true,
                     None,
-                    &[
-                        ("1.0 (끔)", "1.0"),
-                        ("3.0 (최소)", "3.0"),
-                        ("4.5 (권장)", "4.5"),
-                        ("7.0 (강화)", "7.0"),
-                    ],
                     window,
                     cx,
                 ),
@@ -1885,13 +1809,6 @@ fn value_widget(
                     16.0,
                     false,
                     None,
-                    &[
-                        ("0 (보통)", "0"),
-                        ("64", "64"),
-                        ("128 (중간)", "128"),
-                        ("192", "192"),
-                        ("255 (최대)", "255"),
-                    ],
                     window,
                     cx,
                 ),
