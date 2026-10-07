@@ -2815,24 +2815,31 @@ fn row(
     let action_lane = if set {
         let key2 = opt.key;
         let view = cx.entity();
-        div().w(px(36.)).flex().justify_center().child(
-            Button::new(format!("reset-{key2}"))
-                .ghost()
-                .xsmall()
-                .icon(IconName::RotateCcw)
-                .tooltip("기본값으로 되돌리기")
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.reset_key(key2, cx));
-                }),
-        )
+        div()
+            .w(px(36.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                Button::new(format!("reset-{key2}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::RotateCcw)
+                    .tooltip("기본값으로 되돌리기")
+                    .on_click(move |_, _, cx| {
+                        view.update(cx, |this, cx| this.reset_key(key2, cx));
+                    }),
+            )
     } else {
-        div().w(px(36.))
+        div().w(px(36.)).flex_none()
     };
 
     row.child(
         v_flex()
             .id(opt_id)
-            .w(px(250.))
+            .w(px(240.))
+            .flex_none()
             .gap_0()
             .tooltip(move |window, cx| Tooltip::new(doc).build(window, cx))
             .child(
@@ -2875,11 +2882,17 @@ fn row(
     .child(
         div()
             .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .child(value_widget(this, opt, window, cx)),
     )
     .child(
         div()
-            .w(px(72.))
+            .w(px(80.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
             .child(if set {
                 div()
                     .px_2()
@@ -3256,7 +3269,8 @@ impl Render for SettingsView {
                         .border_color(cx.theme().border)
                         .child(
                             div()
-                                .w(px(250.))
+                                .w(px(240.))
+                                .flex_none()
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
@@ -3265,6 +3279,7 @@ impl Render for SettingsView {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
@@ -3272,13 +3287,17 @@ impl Render for SettingsView {
                         )
                         .child(
                             div()
-                                .w(px(72.))
+                                .w(px(80.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
                                 .child("상태"),
                         )
-                        .child(div().w(px(36.))),
+                        .child(div().w(px(36.)).flex_none()),
                 )
                 .children(opts.into_iter().enumerate().map(|(i, opt)| {
                     row(self, opt, i == total - 1, window, cx)
