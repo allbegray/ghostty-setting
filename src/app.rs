@@ -61,34 +61,72 @@ fn category_icon(idx: usize) -> IconName {
     }
 }
 actions!(settings, [Save, FocusSearch]);
-const POPULAR_ACTIONS: &[(&str, &str)] = &[
-    ("copy_to_clipboard", "클립보드 복사"),
-    ("paste_from_clipboard", "클립보드 붙여넣기"),
+pub const GHOSTTY_ACTIONS: &[(&str, &str)] = &[
+    ("copy_to_clipboard", "클립보드에 복사"),
+    ("paste_from_clipboard", "클립보드에서 붙여넣기"),
+    ("paste_from_selection", "선택 영역 붙여넣기"),
+    ("copy_url_to_clipboard", "마지막 URL 복사"),
+    ("copy_title_to_clipboard", "창 제목 복사"),
+    ("select_all", "전체 선택"),
+    ("adjust_selection:left", "선택 영역 왼쪽 확장"),
+    ("adjust_selection:right", "선택 영역 오른쪽 확장"),
     ("new_window", "새 창 열기"),
     ("new_tab", "새 탭 열기"),
     ("close_tab", "현재 탭 닫기"),
-    ("close_surface", "현재 서피스 닫기"),
-    ("close_window", "창 닫기"),
-    ("previous_tab", "이전 탭 이동"),
-    ("next_tab", "다음 탭 이동"),
-    ("toggle_fullscreen", "전체화면 토글"),
-    ("toggle_quick_terminal", "퀵 터미널 토글"),
+    ("close_surface", "현재 서피스(분할) 닫기"),
+    ("close_window", "현재 창 닫기"),
+    ("close_all_windows", "모든 창 닫기"),
+    ("previous_tab", "이전 탭으로 이동"),
+    ("next_tab", "다음 탭으로 이동"),
+    ("last_tab", "마지막 탭으로 이동"),
+    ("goto_tab:1", "1번 탭으로 이동"),
+    ("goto_tab:2", "2번 탭으로 이동"),
+    ("goto_tab:3", "3번 탭으로 이동"),
+    ("goto_tab:4", "4번 탭으로 이동"),
+    ("goto_tab:5", "5번 탭으로 이동"),
+    ("toggle_tab_overview", "탭 개요(오버뷰) 토글"),
+    ("new_split:right", "오른쪽에 분할 창 생성"),
+    ("new_split:down", "아래쪽에 분할 창 생성"),
+    ("goto_split:next", "다음 분할 창으로 이동"),
+    ("goto_split:previous", "이전 분할 창으로 이동"),
+    ("goto_split:top", "위쪽 분할 창으로 이동"),
+    ("goto_split:bottom", "아래쪽 분할 창으로 이동"),
+    ("goto_split:left", "왼쪽 분할 창으로 이동"),
+    ("goto_split:right", "오른쪽 분할 창으로 이동"),
+    ("toggle_split_zoom", "분할 창 확대/축소 토글"),
+    ("equalize_splits", "분할 창 크기 균등화"),
     ("clear_screen", "화면 지우기"),
-    ("increase_font_size:1", "글꼴 확대 (+1)"),
-    ("decrease_font_size:1", "글꼴 축소 (-1)"),
-    ("reset_font_size", "글꼴 크기 초기화"),
     ("scroll_to_top", "맨 위로 스크롤"),
     ("scroll_to_bottom", "맨 아래로 스크롤"),
-    ("jump_to_prompt:1", "다음 프롬프트"),
-    ("jump_to_prompt:-1", "이전 프롬프트"),
-    ("new_split:right", "우측 분할"),
-    ("new_split:down", "하단 분할"),
-    ("toggle_split_zoom", "분할 줌 토글"),
-    ("toggle_command_palette", "커맨드 팔레트"),
+    ("scroll_page_up", "한 페이지 위로 스크롤"),
+    ("scroll_page_down", "한 페이지 아래로 스크롤"),
+    ("jump_to_prompt:1", "다음 쉘 프롬프트로 이동"),
+    ("jump_to_prompt:-1", "이전 쉘 프롬프트로 이동"),
+    ("increase_font_size:1", "글꼴 크기 확대 (+1)"),
+    ("decrease_font_size:1", "글꼴 크기 축소 (-1)"),
+    ("reset_font_size", "글꼴 크기 기본값 초기화"),
+    ("toggle_fullscreen", "전체화면 토글"),
+    ("toggle_maximize", "창 최대화 토글"),
+    ("toggle_quick_terminal", "퀵 터미널 토글"),
+    ("toggle_command_palette", "커맨드 팔레트 열기"),
+    ("toggle_window_decorations", "창 프레임/장식 토글"),
+    ("toggle_window_float_on_top", "항상 위에 표시 토글"),
+    ("toggle_visibility", "창 보이기/숨기기 토글"),
+    ("toggle_background_opacity", "배경 불투명도 토글"),
     ("open_config", "설정 파일 열기"),
-    ("reload_config", "설정 다시 불러오기"),
-    ("reset", "터미널 초기화"),
+    ("reload_config", "설정 파일 다시 로드"),
+    ("inspector", "Ghostty 인스펙터 열기"),
+    ("reset", "터미널 세션 리셋"),
+    ("quit", "Ghostty 종료"),
 ];
+
+fn action_description(action: &str) -> Option<&'static str> {
+    let base = action.split(':').next().unwrap_or(action);
+    GHOSTTY_ACTIONS
+        .iter()
+        .find(|(a, _)| *a == action || a.split(':').next() == Some(base))
+        .map(|(_, d)| *d)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum DiffLine {
@@ -217,9 +255,9 @@ pub enum ActiveModal {
         items: Vec<String>,
         recorded_trigger: String,
         selected_action: String,
+        action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
         is_recording: bool,
         recorder_focus: FocusHandle,
-        custom_action_input: Entity<InputState>,
         new_item_input: Entity<InputState>,
     },
     DiffViewer,
@@ -378,7 +416,7 @@ impl SettingsView {
         selected_action: &str,
         is_recording: bool,
         recorder_focus: &FocusHandle,
-        custom_action_input: &Entity<InputState>,
+        action_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
         new_item_input: &Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
@@ -502,7 +540,18 @@ impl SettingsView {
                                                     .child(format!("({trigger})")),
                                             )
                                             .child(Icon::new(IconName::ArrowRight).xsmall().text_color(cx.theme().muted_foreground))
-                                            .child(div().text_xs().font_medium().child(action.to_string())),
+                                            .child(
+                                                h_flex()
+                                                    .gap_1p5()
+                                                    .items_center()
+                                                    .child(div().text_xs().font_medium().child(action.to_string()))
+                                                    .children(action_description(action).map(|desc| {
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child(format!("({desc})"))
+                                                    })),
+                                            ),
                                     )
                                     .child(
                                         Button::new(format!("del-binding-{ix}"))
@@ -661,9 +710,13 @@ impl SettingsView {
                                 )
                         )
                         .child(
-                            div()
-                                .w(px(220.))
-                                .child(Input::new(custom_action_input).small())
+                            if let Some(sel) = action_select {
+                                div()
+                                    .flex_1()
+                                    .child(Select::new(sel).small())
+                            } else {
+                                div().flex_1()
+                            }
                         )
                         .child(
                             Button::new("add-binding-btn")
@@ -673,13 +726,9 @@ impl SettingsView {
                                 .label("추가")
                                 .disabled(trigger_val.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(ActiveModal::ListEditor { recorded_trigger, custom_action_input, items, selected_action, .. }) = &mut this.active_modal {
-                                        let mut action = custom_action_input.read(cx).value().to_string();
-                                        if action.trim().is_empty() {
-                                            action = selected_action.clone();
-                                        }
-                                        if !recorded_trigger.is_empty() && !action.trim().is_empty() {
-                                            let entry = format!("{recorded_trigger}={}", action.trim());
+                                    if let Some(ActiveModal::ListEditor { recorded_trigger, items, selected_action, .. }) = &mut this.active_modal {
+                                        if !recorded_trigger.is_empty() && !selected_action.trim().is_empty() {
+                                            let entry = format!("{recorded_trigger}={}", selected_action.trim());
                                             items.push(entry);
                                             recorded_trigger.clear();
                                             cx.notify();
@@ -691,12 +740,12 @@ impl SettingsView {
                 .child(
                     v_flex()
                         .gap_1()
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 동작 빠른 선택:"))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 동작 빠른 선택 (클릭 시 자동 선택):"))
                         .child(
                             h_flex()
                                 .gap_1()
                                 .flex_wrap()
-                                .children(POPULAR_ACTIONS.iter().take(8).map(|(act, desc)| {
+                                .children(GHOSTTY_ACTIONS.iter().take(8).map(|(act, desc)| {
                                     let act_str = act.to_string();
                                     let view = view.clone();
                                     let is_sel = act_val == *act;
@@ -720,13 +769,10 @@ impl SettingsView {
                                                 .hover(|s| s.text_color(cx.theme().foreground))
                                         })
                                         .child(format!("{desc} ({act})"))
-                                        .on_click(move |_, window, cx| {
+                                        .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
-                                                if let Some(ActiveModal::ListEditor { selected_action, custom_action_input, .. }) = &mut this.active_modal {
+                                                if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
                                                     *selected_action = act_str.clone();
-                                                    custom_action_input.update(cx, |inp, cx| {
-                                                        inp.set_value(&act_str, window, cx);
-                                                    });
                                                     cx.notify();
                                                 }
                                             });
@@ -1154,13 +1200,44 @@ fn value_widget(
                                 let items = this.file.get_all(key);
                                 let recorder_focus = cx.focus_handle();
                                 let new_item_input = cx.new(|cx| InputState::new(window, cx).placeholder("새 항목 입력"));
-                                let custom_action_input = cx.new(|cx| InputState::new(window, cx).placeholder("직접 동작 입력 (예: new_tab)"));
+                                let action_select = if is_keybind {
+                                    let action_items: Vec<SharedString> = GHOSTTY_ACTIONS
+                                        .iter()
+                                        .map(|(act, desc)| format!("{act} · {desc}").into())
+                                        .collect();
+                                    let state = cx.new(|cx| {
+                                        SelectState::new(
+                                            SearchableVec::new(action_items),
+                                            Some(IndexPath::new(0)),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                    cx.subscribe(&state, |this, _, event, cx| {
+                                        let SelectEvent::Confirm(value) = event;
+                                        if let Some(val) = value {
+                                            let act = val.split(" · ").next().unwrap_or(val.as_ref()).to_string();
+                                            if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
+                                                *selected_action = act;
+                                                cx.notify();
+                                            }
+                                        }
+                                    }).detach();
+                                    Some(state)
+                                } else {
+                                    None
+                                };
+                                let selected_action = if is_keybind {
+                                    GHOSTTY_ACTIONS[0].0.to_string()
+                                } else {
+                                    String::new()
+                                };
                                 this.active_modal = Some(ActiveModal::ListEditor {
                                     key,
                                     items,
                                     recorded_trigger: String::new(),
-                                    custom_action_input,
-                                    selected_action: "copy_to_clipboard".to_string(),
+                                    selected_action,
+                                    action_select,
                                     is_recording: false,
                                     recorder_focus,
                                     new_item_input,
@@ -1202,7 +1279,17 @@ fn value_widget(
                                             .child(pretty),
                                     )
                                     .child(Icon::new(IconName::ArrowRight).xsmall().text_color(cx.theme().muted_foreground))
-                                    .child(div().text_color(cx.theme().muted_foreground).child(action.to_string()))
+                                    .child(
+                                        h_flex()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(div().font_medium().child(action.to_string()))
+                                            .children(action_description(action).map(|desc| {
+                                                div()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!("({desc})"))
+                                            })),
+                                    )
                             }))
                             .children(if all.len() > 2 {
                                 Some(
@@ -1906,9 +1993,9 @@ impl Render for SettingsView {
                 items,
                 recorded_trigger,
                 selected_action,
+                action_select,
                 is_recording,
                 recorder_focus,
-                custom_action_input,
                 new_item_input,
             }) => Some(self.render_list_editor_modal(
                 key,
@@ -1917,7 +2004,7 @@ impl Render for SettingsView {
                 selected_action,
                 *is_recording,
                 recorder_focus,
-                custom_action_input,
+                action_select.as_ref(),
                 new_item_input,
                 cx,
             )),
@@ -1975,5 +2062,13 @@ mod tests {
         assert!(diff.iter().any(|d| matches!(d, DiffLine::Added(s) if s == "b2")));
         assert!(diff.iter().any(|d| matches!(d, DiffLine::Removed(s) if s == "b")));
         assert!(diff.iter().any(|d| matches!(d, DiffLine::Added(s) if s == "d")));
+    }
+
+    #[test]
+    fn test_action_description() {
+        assert_eq!(action_description("copy_to_clipboard"), Some("클립보드에 복사"));
+        assert_eq!(action_description("new_tab"), Some("새 탭 열기"));
+        assert_eq!(action_description("increase_font_size:1"), Some("글꼴 크기 확대 (+1)"));
+        assert_eq!(action_description("unknown_action_xyz"), None);
     }
 }
