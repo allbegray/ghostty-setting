@@ -26,11 +26,12 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex, v_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput},
     scroll::ScrollableElement as _,
     select::{Select, SelectEvent, SelectState},
     searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
+    slider::{Slider, SliderEvent, SliderState},
     status_bar::StatusBar,
     switch::Switch,
     tooltip::Tooltip,
@@ -397,6 +398,7 @@ pub struct SettingsView {
     text_inputs: HashMap<&'static str, Entity<InputState>>,
     selects: HashMap<&'static str, Entity<SelectState<SearchableVec<SharedString>>>>,
     colors: HashMap<&'static str, Entity<ColorPickerState>>,
+    sliders: HashMap<&'static str, Entity<SliderState>>,
     _subscriptions: Vec<Subscription>,
     active_modal: Option<ActiveModal>,
 }
@@ -423,6 +425,7 @@ impl SettingsView {
             text_inputs: HashMap::new(),
             selects: HashMap::new(),
             colors: HashMap::new(),
+            sliders: HashMap::new(),
             _subscriptions: vec![subscription],
             active_modal: None,
         }
@@ -460,6 +463,7 @@ impl SettingsView {
         self.text_inputs.clear();
         self.selects.clear();
         self.colors.clear();
+        self.sliders.clear();
         self.active_modal = None;
         cx.notify();
     }
@@ -497,6 +501,7 @@ impl SettingsView {
         self.text_inputs.remove(key);
         self.selects.remove(key);
         self.colors.remove(key);
+        self.sliders.remove(key);
         self.notice = None;
         cx.notify();
     }
@@ -551,6 +556,44 @@ impl SettingsView {
                     } else {
                         this.file.set(key, v.trim());
                     }
+                    this.notice = None;
+                    cx.notify();
+                }
+            });
+            self._subscriptions.push(sub);
+            self.text_inputs.insert(key, state);
+        }
+        self.text_inputs.get(key).unwrap().clone()
+    }
+
+    fn get_or_create_number_input(
+        &mut self,
+        key: &'static str,
+        default_val: &str,
+        min: f64,
+        max: f64,
+        step: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if !self.text_inputs.contains_key(key) {
+            let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(seed)
+                    .min(min)
+                    .max(max)
+                    .step(step)
+            });
+            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let v = state.read(cx).value().to_string();
+                    if v.trim().is_empty() {
+                        this.file.remove(key);
+                    } else {
+                        this.file.set(key, v.trim());
+                    }
+                    this.sliders.remove(key);
                     this.notice = None;
                     cx.notify();
                 }
@@ -1436,98 +1479,83 @@ fn parse_hex_to_hsla(s: &str) -> Option<gpui_kit::Hsla> {
     )
 }
 
-fn render_stepper_widget(
-    _this: &mut SettingsView,
+fn render_bounded_slider_number(
+    this: &mut SettingsView,
     key: &'static str,
     val_str: &str,
     default_val: f64,
-    step: f64,
     min: f64,
     max: f64,
+    step: f64,
     is_float: bool,
-    unit: &'static str,
+    unit: Option<&'static str>,
     presets: &'static [(&'static str, &'static str)],
+    window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
-    let cur: f64 = val_str.parse().unwrap_or(default_val);
+    let num_state = this.get_or_create_number_input(
+        key,
+        &format!("{default_val}"),
+        min,
+        max,
+        step,
+        window,
+        cx,
+    );
+
+    let mut num_input = NumberInput::new(&num_state).small();
+    if let Some(suf) = unit {
+        num_input = num_input.suffix(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(suf),
+        );
+    }
+
+    if !this.sliders.contains_key(key) {
+        let cur: f32 = val_str.parse().unwrap_or(default_val as f32);
+        let state = cx.new(|_cx| {
+            SliderState::new()
+                .min(min as f32)
+                .max(max as f32)
+                .step(step as f32)
+                .default_value(cur)
+        });
+        cx.subscribe(&state, move |this, _, event, cx| {
+            let (SliderEvent::Change(val) | SliderEvent::Release(val)) = event;
+            let new_val = if is_float {
+                format!("{:.2}", val.start())
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            } else {
+                format!("{}", val.start().round() as i64)
+            };
+            this.file.set(key, &new_val);
+            this.text_inputs.remove(key);
+            this.notice = None;
+            cx.notify();
+        })
+        .detach();
+        this.sliders.insert(key, state);
+    }
+
+    let slider_state = this.sliders.get(key).unwrap().clone();
     let view = cx.entity();
-
-    let dec_next = (cur - step).max(min);
-    let dec_str = if is_float {
-        format!("{dec_next:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        format!("{}", dec_next as i64)
-    };
-
-    let inc_next = (cur + step).min(max);
-    let inc_str = if is_float {
-        format!("{inc_next:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        format!("{}", inc_next as i64)
-    };
-
-    let view_dec = view.clone();
-    let view_inc = view.clone();
 
     h_flex()
         .gap_2()
         .items_center()
         .child(
-            h_flex()
-                .gap_1()
-                .items_center()
-                .child(
-                    Button::new(format!("dec-{key}"))
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Minus)
-                        .disabled(cur <= min)
-                        .on_click(move |_, _, cx| {
-                            view_dec.update(cx, |this, cx| {
-                                this.file.set(key, &dec_str);
-                                this.text_inputs.remove(key);
-                                this.notice = None;
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    div()
-                        .min_w(px(64.))
-                        .px_2()
-                        .py(px(2.))
-                        .rounded_md()
-                        .bg(cx.theme().muted)
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .text_xs()
-                        .font_family("Menlo")
-                        .font_semibold()
-                        .flex()
-                        .justify_center()
-                        .child(if val_str.is_empty() {
-                            "기본값".to_string()
-                        } else if unit.is_empty() {
-                            val_str.to_string()
-                        } else {
-                            format!("{val_str} {unit}")
-                        }),
-                )
-                .child(
-                    Button::new(format!("inc-{key}"))
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Plus)
-                        .disabled(cur >= max)
-                        .on_click(move |_, _, cx| {
-                            view_inc.update(cx, |this, cx| {
-                                this.file.set(key, &inc_str);
-                                this.text_inputs.remove(key);
-                                this.notice = None;
-                                cx.notify();
-                            });
-                        }),
-                ),
+            div()
+                .w(px(140.))
+                .child(Slider::new(&slider_state))
+        )
+        .child(
+            div()
+                .w(px(110.))
+                .child(num_input)
         )
         .children(if !presets.is_empty() {
             Some(
@@ -1562,6 +1590,7 @@ fn render_stepper_widget(
                                 view.update(cx, |this, cx| {
                                     this.file.set(key, &target_str);
                                     this.text_inputs.remove(key);
+                                    this.sliders.remove(key);
                                     this.notice = None;
                                     cx.notify();
                                 });
@@ -1571,6 +1600,53 @@ fn render_stepper_widget(
         } else {
             None
         })
+        .into_any_element()
+}
+
+fn render_chips_only(
+    key: &'static str,
+    current_val: &str,
+    chips: &'static [(&'static str, &'static str)],
+    view: Entity<SettingsView>,
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    h_flex()
+        .gap_1()
+        .flex_wrap()
+        .children(chips.iter().map(|(label, target)| {
+            let is_active = current_val == *target;
+            let view = view.clone();
+            let target_str = target.to_string();
+            div()
+                .id(format!("{key}-chip-{label}"))
+                .cursor_pointer()
+                .px_1p5()
+                .py(px(1.))
+                .rounded_sm()
+                .border_1()
+                .text_xs()
+                .when(is_active, |s| {
+                    s.bg(cx.theme().primary.opacity(0.12))
+                        .border_color(cx.theme().primary)
+                        .text_color(cx.theme().primary)
+                })
+                .when(!is_active, |s| {
+                    s.bg(cx.theme().background)
+                        .border_color(cx.theme().border)
+                        .text_color(cx.theme().muted_foreground)
+                        .hover(|s| s.text_color(cx.theme().foreground))
+                })
+                .child(*label)
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.file.set(key, &target_str);
+                        this.text_inputs.remove(key);
+                        this.sliders.remove(key);
+                        this.notice = None;
+                        cx.notify();
+                    });
+                })
+        }))
         .into_any_element()
 }
 fn render_input_with_chips(
@@ -1692,16 +1768,16 @@ fn value_widget(
             let current_val = this.file.get(key).unwrap_or_default();
 
             match key {
-                "font-size" => render_stepper_widget(
+                "font-size" => render_bounded_slider_number(
                     this,
                     key,
                     &current_val,
                     13.0,
-                    1.0,
                     8.0,
                     72.0,
+                    1.0,
                     true,
-                    "pt",
+                    Some("pt"),
                     &[
                         ("11", "11"),
                         ("12", "12"),
@@ -1712,18 +1788,19 @@ fn value_widget(
                         ("18", "18"),
                         ("20", "20"),
                     ],
+                    window,
                     cx,
                 ),
-                "background-opacity" => render_stepper_widget(
+                "background-opacity" => render_bounded_slider_number(
                     this,
                     key,
                     &current_val,
                     1.0,
-                    0.05,
                     0.0,
                     1.0,
+                    0.05,
                     true,
-                    "",
+                    None,
                     &[
                         ("100%", "1.0"),
                         ("95%", "0.95"),
@@ -1733,80 +1810,81 @@ fn value_widget(
                         ("70%", "0.7"),
                         ("50%", "0.5"),
                     ],
+                    window,
                     cx,
                 ),
-                "cursor-opacity" => render_stepper_widget(
+                "cursor-opacity" => render_bounded_slider_number(
                     this,
                     key,
                     &current_val,
                     1.0,
-                    0.1,
                     0.0,
                     1.0,
+                    0.05,
                     true,
-                    "",
+                    None,
                     &[
                         ("100%", "1.0"),
                         ("80%", "0.8"),
                         ("60%", "0.6"),
                         ("40%", "0.4"),
                     ],
+                    window,
                     cx,
                 ),
-                "minimum-contrast" => render_stepper_widget(
+                "minimum-contrast" => render_bounded_slider_number(
                     this,
                     key,
                     &current_val,
                     1.0,
-                    0.5,
                     1.0,
                     21.0,
+                    0.5,
                     true,
-                    "",
+                    None,
                     &[
                         ("1.0 (끔)", "1.0"),
                         ("3.0 (최소)", "3.0"),
                         ("4.5 (권장)", "4.5"),
                         ("7.0 (강화)", "7.0"),
                     ],
+                    window,
                     cx,
                 ),
-                "window-width" => render_stepper_widget(
-                    this,
-                    key,
-                    &current_val,
-                    80.0,
-                    10.0,
-                    20.0,
-                    500.0,
-                    false,
-                    "열",
-                    &[("80", "80"), ("100", "100"), ("120", "120"), ("140", "140")],
-                    cx,
-                ),
-                "window-height" => render_stepper_widget(
-                    this,
-                    key,
-                    &current_val,
-                    24.0,
-                    5.0,
-                    10.0,
-                    200.0,
-                    false,
-                    "행",
-                    &[("24", "24"), ("30", "30"), ("40", "40"), ("50", "50")],
-                    cx,
-                ),
-                "font-thicken-strength" => render_stepper_widget(
+                "window-width" => {
+                    let num_state = this.get_or_create_number_input(key, "80", 20.0, 500.0, 10.0, window, cx);
+                    let num_input = NumberInput::new(&num_state).small().suffix(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child("열"),
+                    );
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().w(px(120.)).child(num_input))
+                        .child(render_chips_only(key, &current_val, &[("80", "80"), ("100", "100"), ("120", "120"), ("140", "140")], cx.entity(), cx))
+                        .into_any_element()
+                }
+                "window-height" => {
+                    let num_state = this.get_or_create_number_input(key, "24", 10.0, 200.0, 5.0, window, cx);
+                    let num_input = NumberInput::new(&num_state).small().suffix(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child("행"),
+                    );
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().w(px(120.)).child(num_input))
+                        .child(render_chips_only(key, &current_val, &[("24", "24"), ("30", "30"), ("40", "40"), ("50", "50")], cx.entity(), cx))
+                        .into_any_element()
+                }
+                "font-thicken-strength" => render_bounded_slider_number(
                     this,
                     key,
                     &current_val,
                     0.0,
-                    16.0,
                     0.0,
                     255.0,
+                    16.0,
                     false,
-                    "",
+                    None,
                     &[
                         ("0 (보통)", "0"),
                         ("64", "64"),
@@ -1814,6 +1892,7 @@ fn value_widget(
                         ("192", "192"),
                         ("255 (최대)", "255"),
                     ],
+                    window,
                     cx,
                 ),
                 "working-directory" => {
