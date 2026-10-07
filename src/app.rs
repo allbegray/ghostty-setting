@@ -249,6 +249,124 @@ fn ghostty_trigger_to_pretty(trigger: &str) -> String {
     out
 }
 
+fn pick_folder() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("POSIX path of (choose folder with prompt \"Ghostty 작업 디렉터리 선택\")")
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn pick_file() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("POSIX path of (choose file with prompt \"Ghostty 설정 파일 선택\")")
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+static SYSTEM_FONTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    for path in ["/Applications/Ghostty.app/Contents/MacOS/ghostty", "ghostty"] {
+        if let Ok(output) = std::process::Command::new(path).arg("+list-fonts").output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut fonts: Vec<String> = text
+                    .lines()
+                    .filter(|l| !l.starts_with(' ') && !l.starts_with('\t') && !l.trim().is_empty())
+                    .map(|l| l.trim().to_string())
+                    .collect();
+                fonts.sort();
+                fonts.dedup();
+                if !fonts.is_empty() {
+                    return fonts;
+                }
+            }
+        }
+    }
+    vec![
+        "JetBrains Mono".into(),
+        "SF Mono".into(),
+        "Menlo".into(),
+        "Monaco".into(),
+        "Courier New".into(),
+        "Fira Code".into(),
+        "Cascadia Code".into(),
+        "Hack".into(),
+        "MesloLGS NF".into(),
+        "Source Code Pro".into(),
+    ]
+});
+
+pub fn get_system_fonts() -> &'static [String] {
+    &SYSTEM_FONTS
+}
+
+static GHOSTTY_THEMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    for path in ["/Applications/Ghostty.app/Contents/MacOS/ghostty", "ghostty"] {
+        if let Ok(output) = std::process::Command::new(path).arg("+list-themes").output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut themes: Vec<String> = text
+                    .lines()
+                    .filter_map(|l| {
+                        let trimmed = l.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed.split(" (").next().unwrap_or(trimmed).to_string())
+                        }
+                    })
+                    .collect();
+                themes.sort();
+                themes.dedup();
+                if !themes.is_empty() {
+                    return themes;
+                }
+            }
+        }
+    }
+    vec![
+        "catppuccin-mocha".into(),
+        "catppuccin-macchiato".into(),
+        "catppuccin-latte".into(),
+        "tokyo-night".into(),
+        "nord".into(),
+        "dracula".into(),
+        "rose-pine".into(),
+        "gruvbox-dark".into(),
+        "solarized-dark".into(),
+        "solarized-light".into(),
+        "one-dark".into(),
+        "monokai".into(),
+    ]
+});
+
+pub fn get_ghostty_themes() -> &'static [String] {
+    &GHOSTTY_THEMES
+}
+const POPULAR_FONTS: &[&str] = &[
+    "JetBrains Mono",
+    "SF Mono",
+    "Menlo",
+    "Monaco",
+    "Fira Code",
+    "Cascadia Code",
+];
+
 pub enum ActiveModal {
     ListEditor {
         key: &'static str,
@@ -256,6 +374,8 @@ pub enum ActiveModal {
         recorded_trigger: String,
         selected_action: String,
         action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        selected_font: String,
         is_recording: bool,
         recorder_focus: FocusHandle,
         new_item_input: Entity<InputState>,
@@ -414,15 +534,49 @@ impl SettingsView {
         items: &[String],
         recorded_trigger: &str,
         selected_action: &str,
+        action_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
+        font_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
+        selected_font: &str,
         is_recording: bool,
         recorder_focus: &FocusHandle,
-        action_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
         new_item_input: &Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let is_keybind = key == "keybind";
+        let is_font = key == "font-family";
+        let is_config = key == "config-file";
         let opt_label = lookup(key).map(|o| o.label).unwrap_or(key);
         let view = cx.entity();
+
+        let icon = if is_keybind {
+            IconName::Keyboard
+        } else if is_font {
+            IconName::Type
+        } else if is_config {
+            IconName::FileText
+        } else {
+            IconName::Pencil
+        };
+
+        let title = if is_keybind {
+            "키 바인딩 설정 (`keybind`)".to_string()
+        } else if is_font {
+            "글꼴 우선순위 설정 (`font-family`)".to_string()
+        } else if is_config {
+            "추가 설정 파일 불러오기 (`config-file`)".to_string()
+        } else {
+            format!("{opt_label} 목록 편집 (`{key}`)")
+        };
+
+        let subtitle = if is_keybind {
+            "단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다."
+        } else if is_font {
+            "시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다."
+        } else if is_config {
+            "파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다."
+        } else {
+            "설정 파일에 반복 지정되는 항목 목록을 관리합니다."
+        };
 
         let header = h_flex()
             .items_center()
@@ -443,7 +597,7 @@ impl SettingsView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(Icon::new(if is_keybind { IconName::Keyboard } else { IconName::Pencil }).small()),
+                            .child(Icon::new(icon).small()),
                     )
                     .child(
                         v_flex()
@@ -452,17 +606,13 @@ impl SettingsView {
                                 div()
                                     .font_semibold()
                                     .text_base()
-                                    .child(if is_keybind { "키 바인딩 설정 (`keybind`)".to_string() } else { format!("{opt_label} 목록 편집 (`{key}`)") }),
+                                    .child(title),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(if is_keybind {
-                                        "단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다."
-                                    } else {
-                                        "설정 파일에 반복 지정되는 항목 목록을 관리합니다."
-                                    }),
+                                    .child(subtitle),
                             ),
                     ),
             )
@@ -779,6 +929,138 @@ impl SettingsView {
                                         })
                                 }))
                         )
+                )
+                .into_any_element()
+        } else if is_font {
+            let sel_font = selected_font.to_string();
+            let view = view.clone();
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.15))
+                .child(
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 글꼴 추가 (시스템 설치 폰트 선택)")
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            if let Some(font_sel) = font_select {
+                                div()
+                                    .flex_1()
+                                    .child(Select::new(font_sel).small())
+                            } else {
+                                div().flex_1()
+                            }
+                        )
+                        .child(
+                            Button::new("add-font-btn")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("글꼴 추가")
+                                .disabled(sel_font.is_empty())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(ActiveModal::ListEditor { items, selected_font, .. }) = &mut this.active_modal {
+                                        if !selected_font.trim().is_empty() {
+                                            items.push(selected_font.trim().to_string());
+                                            cx.notify();
+                                        }
+                                    }
+                                }))
+                        )
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("인기 코딩 폰트 빠른 추가:"))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .flex_wrap()
+                                .children(POPULAR_FONTS.iter().map(|&font_name| {
+                                    let view = view.clone();
+                                    div()
+                                        .id(format!("popular-font-{font_name}"))
+                                        .cursor_pointer()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .bg(cx.theme().background)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .hover(|s| s.text_color(cx.theme().foreground))
+                                        .child(format!("+ {font_name}"))
+                                        .on_click(move |_, _, cx| {
+                                            view.update(cx, |this, cx| {
+                                                if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
+                                                    if !items.iter().any(|f| f == font_name) {
+                                                        items.push(font_name.to_string());
+                                                        cx.notify();
+                                                    }
+                                                }
+                                            });
+                                        })
+                                }))
+                        )
+                )
+                .into_any_element()
+        } else if is_config {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .child(Input::new(new_item_input).small())
+                )
+                .child(
+                    Button::new("browse-config-file-btn")
+                        .outline()
+                        .small()
+                        .icon(IconName::FileText)
+                        .label("파일 찾아보기")
+                        .on_click(cx.listener(|_this, _, _, cx| {
+                            cx.spawn(async move |this, cx| {
+                                let result = cx.background_spawn(async move {
+                                    pick_file()
+                                }).await;
+
+                                this.update(cx, |this, cx| {
+                                    if let Some(path) = result {
+                                        if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
+                                            items.push(path);
+                                            cx.notify();
+                                        }
+                                    }
+                                }).ok();
+                            }).detach();
+                        }))
+                )
+                .child(
+                    Button::new("add-config-file-btn")
+                        .primary()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("경로 추가")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
+                                let val = new_item_input.read(cx).value().to_string();
+                                if !val.trim().is_empty() {
+                                    items.push(val.trim().to_string());
+                                    new_item_input.update(cx, |inp, cx| {
+                                        inp.set_value("", window, cx);
+                                    });
+                                    cx.notify();
+                                }
+                            }
+                        }))
                 )
                 .into_any_element()
         } else {
@@ -1116,10 +1398,75 @@ fn value_widget(
                 this.text_inputs.insert(opt.key, state);
             }
             let state = this.text_inputs.get(opt.key).unwrap();
-            div()
-                .max_w(px(260.))
-                .child(Input::new(state).small())
-                .into_any_element()
+            if opt.key == "working-directory" {
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .child(Input::new(state).small())
+                    )
+                    .child(
+                        Button::new("browse-working-dir")
+                            .outline()
+                            .small()
+                            .icon(IconName::Folder)
+                            .label("찾아보기")
+                            .tooltip("시스템 폴더 선택기로 디렉터리 찾아보기")
+                            .on_click(cx.listener(|_this, _, _, cx| {
+                                cx.spawn(async move |this, cx| {
+                                    let result = cx.background_spawn(async move {
+                                        pick_folder()
+                                    }).await;
+
+                                    this.update(cx, |this, cx| {
+                                        if let Some(path) = result {
+                                            this.file.set("working-directory", &path);
+                                            this.text_inputs.remove("working-directory");
+                                            this.notice = None;
+                                            cx.notify();
+                                        }
+                                    }).ok();
+                                }).detach();
+                            }))
+                    )
+                    .into_any_element()
+            } else if opt.key == "theme" {
+                if !this.selects.contains_key("theme") {
+                    let theme_names = get_ghostty_themes();
+                    let items_vec: Vec<SharedString> = theme_names.iter().map(|s| s.clone().into()).collect();
+                    let current = this.file.get("theme");
+                    let selected = current
+                        .as_ref()
+                        .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
+                        .map(IndexPath::new);
+                    let state = cx.new(|cx| {
+                        SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
+                    });
+                    cx.subscribe(&state, move |this, _, event, cx| {
+                        let SelectEvent::Confirm(value) = event;
+                        match value {
+                            Some(v) => this.file.set("theme", v.as_ref()),
+                            None => this.file.remove("theme"),
+                        }
+                        this.notice = None;
+                        cx.notify();
+                    })
+                    .detach();
+                    this.selects.insert("theme", state);
+                }
+                let theme_select = this.selects.get("theme").unwrap();
+                div()
+                    .max_w(px(260.))
+                    .child(Select::new(theme_select).small())
+                    .into_any_element()
+            } else {
+                div()
+                    .max_w(px(260.))
+                    .child(Input::new(state).small())
+                    .into_any_element()
+            }
         }
         Kind::Color { .. } => {
             if !this.colors.contains_key(opt.key) {
@@ -1227,6 +1574,36 @@ fn value_widget(
                                 } else {
                                     None
                                 };
+                                let font_select = if key == "font-family" {
+                                    let fonts = get_system_fonts();
+                                    let font_items: Vec<SharedString> =
+                                        fonts.iter().map(|f| f.clone().into()).collect();
+                                    let state = cx.new(|cx| {
+                                        SelectState::new(
+                                            SearchableVec::new(font_items),
+                                            Some(IndexPath::new(0)),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                    cx.subscribe(&state, |this, _, event, cx| {
+                                        let SelectEvent::Confirm(value) = event;
+                                        if let Some(val) = value {
+                                            if let Some(ActiveModal::ListEditor { selected_font, .. }) = &mut this.active_modal {
+                                                *selected_font = val.to_string();
+                                                cx.notify();
+                                            }
+                                        }
+                                    }).detach();
+                                    Some(state)
+                                } else {
+                                    None
+                                };
+                                let selected_font = if key == "font-family" {
+                                    get_system_fonts().first().cloned().unwrap_or_else(|| "JetBrains Mono".into())
+                                } else {
+                                    String::new()
+                                };
                                 let selected_action = if is_keybind {
                                     GHOSTTY_ACTIONS[0].0.to_string()
                                 } else {
@@ -1238,6 +1615,8 @@ fn value_widget(
                                     recorded_trigger: String::new(),
                                     selected_action,
                                     action_select,
+                                    font_select,
+                                    selected_font,
                                     is_recording: false,
                                     recorder_focus,
                                     new_item_input,
@@ -1994,6 +2373,8 @@ impl Render for SettingsView {
                 recorded_trigger,
                 selected_action,
                 action_select,
+                font_select,
+                selected_font,
                 is_recording,
                 recorder_focus,
                 new_item_input,
@@ -2002,9 +2383,11 @@ impl Render for SettingsView {
                 items,
                 recorded_trigger,
                 selected_action,
+                action_select.as_ref(),
+                font_select.as_ref(),
+                selected_font.as_str(),
                 *is_recording,
                 recorder_focus,
-                action_select.as_ref(),
                 new_item_input,
                 cx,
             )),
@@ -2070,5 +2453,19 @@ mod tests {
         assert_eq!(action_description("new_tab"), Some("새 탭 열기"));
         assert_eq!(action_description("increase_font_size:1"), Some("글꼴 크기 확대 (+1)"));
         assert_eq!(action_description("unknown_action_xyz"), None);
+    }
+
+    #[test]
+    fn test_system_fonts_discovery() {
+        let fonts = get_system_fonts();
+        assert!(!fonts.is_empty());
+        assert!(fonts.iter().any(|f| f.contains("Mono") || f.contains("Courier") || f.contains("Menlo")));
+    }
+
+    #[test]
+    fn test_ghostty_themes_discovery() {
+        let themes = get_ghostty_themes();
+        assert!(!themes.is_empty());
+        assert!(themes.iter().any(|t| t.contains("catppuccin") || t.contains("nord") || t.contains("dracula") || t.contains("tokyo")));
     }
 }
