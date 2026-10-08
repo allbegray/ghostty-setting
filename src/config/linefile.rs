@@ -73,7 +73,9 @@ fn split_kv(raw: &str) -> Option<(String, String, String, String, String)> {
     let head = raw[..=eq].to_string();
     let rest = &raw[eq + 1..];
     let value_start = rest.len() - rest.trim_start().len();
-    let value_end = rest.trim_end().len();
+    // A value that is nothing but whitespace has no span to take: `trim_end`
+    // would put the end before the start. Every character is padding then.
+    let value_end = rest.trim_end().len().max(value_start);
     let lead = rest[..value_start].to_string();
     let trail = rest[value_end..].to_string();
     let value = unquote(&rest[value_start..value_end]);
@@ -468,6 +470,17 @@ font-size = 15
             // And the written file must still parse back identically.
             assert_eq!(LineFile::parse(&f.render()).get("title").as_deref(), Some(value));
         }
+    }
+
+    /// A key whose value is only whitespace used to take a byte range whose
+    /// end preceded its start, which panicked on the first frame — the whole
+    /// app failed to open for a file containing `font-family = `.
+    #[test]
+    fn a_whitespace_only_value_is_empty_and_survives_a_round_trip() {
+        let text = "font-family = \nfont-size = 14\n";
+        let file = LineFile::parse(text);
+        assert_eq!(file.get("font-family").as_deref(), Some(""));
+        assert_eq!(file.render(), text);
     }
 
     #[test]
