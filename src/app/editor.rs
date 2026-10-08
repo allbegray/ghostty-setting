@@ -82,7 +82,7 @@ fn render_bounded_slider_number(
 fn render_chips_only(
     key: &'static str,
     current_val: &str,
-    chips: &[(&'static str, &'static str)],
+    chips: &[(Text, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -94,7 +94,7 @@ fn render_chips_only(
             let view = view.clone();
             let target_str = target.to_string();
             div()
-                .id(format!("{key}-chip-{label}"))
+                .id(format!("{key}-chip-{target}"))
                 .cursor_pointer()
                 .px_1p5()
                 .py(px(1.))
@@ -112,7 +112,7 @@ fn render_chips_only(
                         .text_color(cx.theme().muted_foreground)
                         .hover(|s| s.text_color(cx.theme().foreground))
                 })
-                .child(*label)
+                .child(label.s())
                 .on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| {
                         this.commit(key, Some(&target_str), Kept::Nothing, cx);
@@ -125,7 +125,7 @@ fn render_input_with_chips(
     state: &Entity<InputState>,
     key: &'static str,
     current_val: &str,
-    chips: &[(&'static str, &'static str)],
+    chips: &[(Text, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -146,7 +146,7 @@ fn render_input_with_chips(
                     let view = view.clone();
                     let target_str = target.to_string();
                     div()
-                        .id(format!("{key}-chip-{label}"))
+                        .id(format!("{key}-chip-{target}"))
                         .cursor_pointer()
                         .px_1p5()
                         .py(px(1.))
@@ -164,7 +164,7 @@ fn render_input_with_chips(
                                 .text_color(cx.theme().muted_foreground)
                                 .hover(|s| s.text_color(cx.theme().foreground))
                         })
-                        .child(*label)
+                        .child(label.s())
                         .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
                                 this.commit(key, Some(&target_str), Kept::Nothing, cx);
@@ -234,7 +234,7 @@ pub(super) fn value_editor(
                     bound_max,
                     slider.step,
                     true,
-                    slider.unit,
+                    slider.unit.map(|u| u.s()),
                     window,
                     cx,
                 );
@@ -243,9 +243,8 @@ pub(super) fn value_editor(
                 "window-width" | "window-height" => {
                     let field = controls::size_field(key).expect("the window sizes have a field");
                     let num_state = this.get_or_create_number_input(key, field.default, bound_min, bound_max, field.step, window, cx);
-                    let unit = field.unit.unwrap_or("");
                     let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new(unit, unit).s()),
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(field.unit.map(|u| u.s()).unwrap_or("")),
                     );
                     h_flex()
                         .gap_2()
@@ -317,85 +316,11 @@ pub(super) fn value_editor(
                         .child(Select::new(&theme_select).small())
                         .into_any_element()
                 }
-                "command" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "background-blur" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "scrollback-limit" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "window-padding-x" | "window-padding-y" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "mouse-scroll-multiplier" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "adjust-cell-width" | "adjust-cell-height" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "selection-word-chars" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        controls::chips(key).expect("this option has chips"),
-                        cx.entity(),
-                        cx,
-                    )
-                }
                 _ => {
                     let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
+                    if let Some(chips) = controls::chips(key) {
+                        return render_input_with_chips(&state, key, &current_val, chips, cx.entity(), cx);
+                    }
                     div()
                         .max_w(px(260.))
                         .child(Input::new(&state).small())

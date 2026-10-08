@@ -523,7 +523,7 @@ impl SettingsView {
                             h_flex()
                                 .gap_1()
                                 .flex_wrap()
-                                .children(POPULAR_FONTS.iter().map(|&font_name| {
+                                .children(controls::POPULAR_FONTS.iter().map(|&font_name| {
                                     let view = view.clone();
                                     div()
                                         .id(format!("popular-font-{font_name}"))

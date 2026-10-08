@@ -23,7 +23,7 @@ impl Kind {
     /// The range Ghostty accepts for a numeric option.
     ///
     /// This is the valid range, not the range a control offers: a slider may
-    /// deliberately narrow it, and `app::UI_RANGES` records those choices.
+    /// deliberately narrow it, and `app::controls::UI_RANGES` records those choices.
     pub fn bounds(&self) -> Option<(f64, f64)> {
         match self {
             Kind::Int { min, max } => Some((*min as f64, *max as f64)),

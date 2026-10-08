@@ -477,7 +477,7 @@ impl SettingsView {
                 h_flex()
                     .gap_1()
                     .flex_wrap()
-                    .children(POPULAR_FONTS.iter().map(|&font| {
+                    .children(controls::POPULAR_FONTS.iter().map(|&font| {
                         let view = view.clone();
                         let is_active = font_family == font;
                         div()

@@ -404,14 +404,6 @@ static GHOSTTY_THEMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::n
 pub fn get_ghostty_themes() -> &'static [String] {
     &GHOSTTY_THEMES
 }
-const POPULAR_FONTS: &[&str] = &[
-    "JetBrains Mono",
-    "SF Mono",
-    "Menlo",
-    "Monaco",
-    "Fira Code",
-    "Cascadia Code",
-];
 
 pub enum ActiveModal {
     /// The list editor owns its own state (see `list_editor::ListEditorModal`).
