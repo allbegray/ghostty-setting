@@ -7,3 +7,7 @@
 
 # Skill documents fetched from longbridge/gpui-kit; see skills-lock.json.
 /.agents/
+
+# Local working artifacts from the agent flows: specs and tickets live here,
+# provenance for this checkout, not part of the project.
+/.scratch/
