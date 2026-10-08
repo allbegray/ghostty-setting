@@ -577,6 +577,8 @@ pub(super) fn nav_sidebar(
     sidebar.into_any_element()
 }
 
+/// The status bar: the last notice, or the shortcut hints, and the saved/
+/// unsaved indicator.
 pub(super) fn status_bar(notice: Option<&str>, dirty: bool, cx: &App) -> gpui_kit::AnyElement {
         let status = StatusBar::new()
             .left(
@@ -658,6 +660,8 @@ pub(super) fn status_bar(notice: Option<&str>, dirty: bool, cx: &App) -> gpui_ki
         status.into_any_element()
     }
 
+/// One option row: the label's hover card, the value's editor, the state
+/// badge and the reset action.
 fn row(
     this: &mut SettingsView,
     opt: &'static Opt,

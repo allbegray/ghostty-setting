@@ -30,7 +30,57 @@ pub(crate) struct ListEditorModal {
     pub(crate) new_item_input: Entity<InputState>,
 }
 
-/// Which list a key holds, derived once from the key.
+impl ListEditorModal {
+    /// Open the modal for `key`, seeded with the file's values.
+    ///
+    /// The opening site gathers what only it can create — the focus handle, the
+    /// typed-input field, and the dropdowns its key family needs — and hands
+    /// them here, so the modal's shape is the modal's to describe.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open(
+        key: &'static str,
+        items: Vec<String>,
+        recorded_trigger: String,
+        selected_action: String,
+        action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        selected_font: String,
+        is_recording: bool,
+        recorder_focus: FocusHandle,
+        new_item_input: Entity<InputState>,
+    ) -> Self {
+        Self {
+            key,
+            items: ListItems::from_values(items),
+            recorded_trigger,
+            selected_action,
+            action_select,
+            font_select,
+            selected_font,
+            is_recording,
+            recorder_focus,
+            new_item_input,
+        }
+    }
+
+    /// Record the action the keybinding's dropdown confirmed.
+    pub(crate) fn choose_action(&mut self, action: String) {
+        self.selected_action = action;
+    }
+
+    /// Record the font the dropdown confirmed.
+    pub(crate) fn choose_font(&mut self, font: String) {
+        self.selected_font = font;
+    }
+}
+
+
+/// The keys the modal's shapes are written for.
+///
+/// The list editor exists for repeatable keys; these are the four whose shape
+/// is not the generic one, and a test in this module checks each is one.
+pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-feature", "config-file"];
+
 impl ListEditorModal {
     /// Add what the typed input holds, then clear it.
     ///
@@ -52,11 +102,20 @@ impl ListEditorModal {
     }
 }
 
+/// Which list a key holds, derived once from the key.
+///
+/// The five shapes the modal draws are one dispatch on this value, so no arm
+/// re-tests which key it holds.
 pub(crate) enum ListKind {
+    /// Any other repeatable key: one input, one add.
     Plain,
+    /// `font-family`: a system-font dropdown and coding-font chips.
     Font,
+    /// `keybind`: a keystroke recorder and an action dropdown.
     Keybind,
+    /// `font-feature`: a typed input and OpenType feature chips.
     Feature,
+    /// `config-file`: a path picker and a typed path.
     Config,
 }
 
@@ -766,5 +825,25 @@ impl SettingsView {
                     .child(footer)
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The modal's shapes are written for these keys, and every one of them
+    /// is a repeatable key: a shape for a non-repeatable option would be dead
+    /// code, and a repeatable key without its shape falls to the generic
+    /// editor.
+    #[test]
+    fn every_list_modal_key_is_a_repeatable_key() {
+        for key in LIST_MODAL_KEYS {
+            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
+            assert!(
+                matches!(opt.kind, crate::config::schema::Kind::List),
+                "'{key}' opens the list modal but is not a repeatable key"
+            );
+        }
     }
 }

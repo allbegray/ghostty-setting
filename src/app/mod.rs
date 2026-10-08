@@ -1,6 +1,6 @@
 //! Settings workspace: sidebar navigation beside the option detail view.
 //!
-//! Task: find one option among ~68, change its value, save. The composition
+//! Task: find one option among every documented one, change its value, save. The composition
 //! follows the kit guides — semantic components (`Sidebar`, `Button`,
 //! `Input`, `StatusBar`, `Badge`, `Label`), theme tokens only, rem-based
 //! geometry, one scroll owner (the option list). Config semantics still live
@@ -79,8 +79,12 @@ use crate::i18n::{self, Lang, Text};
 const SEARCH_PLACEHOLDER: Text = Text::new("옵션 검색  ( / )", "Search options ( / )");
 
 /// The placeholder a field shows: the option's hint, or the generic one.
+///
+/// An option with no hint in *any* language takes the generic one, so the
+/// fallback does not depend on which language happens to be active.
 fn opt_hint_text(opt: &'static Opt) -> Text {
-    if opt.hint.get(Lang::Ko).is_empty() && opt.hint.get(Lang::En).is_empty() {
+    let hintless = Lang::ALL.iter().all(|lang| opt.hint.get(*lang).is_empty());
+    if hintless {
         Text::new("값 입력", "Enter value")
     } else {
         opt.hint
@@ -521,10 +525,10 @@ impl SettingsView {
 
     /// Switch the interface language.
     ///
-    /// Copy resolved while rendering follows on its own; widgets that captured
-    /// a localized placeholder when they were created do not. Those are
-    /// dropped here and rebuilt from the file on the next frame, which loses
-    /// no edits: every keystroke is already written through to the file.
+    /// Copy resolved while rendering follows on its own; a placeholder a
+    /// widget captured at construction does not. The retained fields have
+    /// their placeholders re-resolved in place — which is what keeps what the
+    /// user has typed, where dropping the fields would lose it.
     fn apply_language(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
         if i18n::current() == lang {
             return;
@@ -627,7 +631,8 @@ impl SettingsView {
     ///
     /// A control reports what happened; the [`commit`] module says which file
     /// edit follows and which slot drew it, so no call site spells the
-    /// empty-means-removes rule or guesses a `Kept`. No call site has to know
+    /// empty-means-removes rule. A stateless control still says its own
+    /// `Kept::Nothing`, because that fact is its own. No call site has to know
     /// which of the four caches holds its key.
     fn commit(&mut self, key: &'static str, report: Reported, cx: &mut Context<Self>) {
         let decision = commit::decide(report);
@@ -698,9 +703,6 @@ impl SettingsView {
             .number_input(key, &seed, min, max, step, window, cx)
     }
 }
-
-/// Parse `#rgb` / `#rrggbb` / X11 hex strings accepted by Ghostty into Hsla,
-/// so the color picker can be seeded with the file's current value.
 
 /// Where Ghostty documents one option. The reference page anchors every option
 /// by its own configuration key.
@@ -952,6 +954,20 @@ mod tests {
     fn the_catalogs_are_never_empty() {
         assert!(!get_system_fonts().is_empty());
         assert!(!get_ghostty_themes().is_empty());
+    }
+
+
+    /// An option with no hint shows the generic placeholder, in whichever
+    /// language — so a hintless option never shows an empty field.
+    #[test]
+    fn a_hintless_option_gets_the_generic_placeholder() {
+        let opt = lookup("background").expect("a hintless text option exists");
+        let restore = i18n::current();
+        for lang in Lang::ALL {
+            i18n::set(*lang);
+            assert!(!opt_hint_text(opt).s().is_empty());
+        }
+        i18n::set(restore);
     }
 
 }

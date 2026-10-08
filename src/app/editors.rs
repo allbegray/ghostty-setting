@@ -102,8 +102,9 @@ pub struct EditorCache {
 impl EditorCache {
     /// The text field for `key`, created on first use, with its write-back.
     ///
-    /// A field reports its value trimmed, and an empty field means the key is
-    /// removed — that distinction is the cache's to make, once.
+    /// The field reports what it holds, as it holds it; what a blank value
+    /// means for the file is the [`crate::app::commit`] module's rule, not the
+    /// cache's.
     pub fn input(
         &mut self,
         key: &'static str,
@@ -122,7 +123,7 @@ impl EditorCache {
         });
         let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
-                let value = state.read(cx).value().trim().to_string();
+                let value = state.read(cx).value().to_string();
                 this.commit(key, Reported::Typed(value), cx);
             }
         });
@@ -163,7 +164,7 @@ impl EditorCache {
         });
         let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
-                let value = state.read(cx).value().trim().to_string();
+                let value = state.read(cx).value().to_string();
                 this.commit(key, Reported::Typed(value), cx);
             }
         });
@@ -318,6 +319,9 @@ impl EditorCache {
     }
 
     /// Re-resolve every retained field's placeholder in the active language.
+    ///
+    /// Covers the row fields only; a field a modal owns is the modal's to
+    /// refresh.
     ///
     /// A field's placeholder is localized copy it took at construction, so a
     /// language switch leaves it stale. Refreshing it in place keeps what the

@@ -58,8 +58,9 @@ pub fn current() -> Lang {
 /// Switch the interface language.
 ///
 /// Every surface that shows localized copy must be re-rendered afterwards;
-/// [`crate::app::SettingsView`] drops its cached widget state on switch so the
-/// new language reaches widgets that captured a string at construction time.
+/// a placeholder a widget captured at construction needs re-resolving, and
+/// [`crate::app::SettingsView`] refreshes the retained fields in place so the
+/// new language reaches them.
 pub fn set(lang: Lang) {
     CURRENT.with(|current| current.set(lang));
 }

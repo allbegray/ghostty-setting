@@ -15,12 +15,14 @@ use super::commit::Reported;
 /// the preview and the editor's fallbacks cannot drift apart. This is also
 /// where the two font-size writers used to be: the preview rested at 13.5
 /// while the editor's slider rested at 13.0.
+/// The size an unset font-size rests at, read from the slider's default.
 fn default_font_size() -> f32 {
     controls::slider("font-size")
         .expect("font-size has a slider")
         .default as f32
 }
 
+/// The family an unset font-family falls back to.
 fn default_font() -> String {
     controls::DEFAULT_FONT.to_string()
 }
@@ -548,7 +550,9 @@ mod tests {
     fn an_empty_file_gets_the_defaults() {
         let model = PreviewModel::from(&file(&[]));
         assert_eq!(model.font_family, default_font());
-        assert_eq!(model.font_size, default_font_size());
+        // The default the slider rests at, which is the one deliberate value
+        // this app has: the preview and the editor used to disagree here.
+        assert_eq!(model.font_size, 13.0);
         assert_eq!(model.theme_name, DEFAULT_THEME);
         assert_eq!(model.cursor_style, DEFAULT_CURSOR_STYLE);
         assert_eq!(model.background_hex, DEFAULT_BG);

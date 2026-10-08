@@ -240,12 +240,6 @@ pub(crate) fn policy_keys() -> impl Iterator<Item = &'static str> {
         .chain(SLIDER_KEYS.iter().copied())
 }
 
-/// The keys the option editor special-cases while opening a list modal, and
-/// the content lists they depend on. `keybind` and `font-feature` are list
-/// keys the modal shapes on; `font-family` seeds its font dropdown.
-#[cfg(test)]
-pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-feature", "config-file"];
-
 /// Whether `value` is a value the option accepts.
 ///
 /// A numeric kind accepts anything the parser reads inside its range, an enum
@@ -402,17 +396,5 @@ mod tests {
         crate::i18n::set(restore);
     }
 
-    /// The modal's list keys are the keys its shapes name: a shape without an
-    /// option would be dead code, and an option without its shape would fall
-    /// to the generic editor.
-    #[test]
-    fn every_list_modal_key_is_an_option() {
-        for key in LIST_MODAL_KEYS {
-            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
-            assert!(
-                matches!(opt.kind, Kind::List),
-                "'{key}' opens the list modal but is not a repeatable key"
-            );
-        }
-    }
+
 }
