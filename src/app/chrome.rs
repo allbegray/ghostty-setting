@@ -9,185 +9,12 @@
 
 use gpui_kit::App;
 
+use std::path::Path;
 use std::rc::Rc;
 
 use super::*;
 
 impl SettingsView {
-
-    pub(super) fn title_bar(&self, dirty: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let short_path = self
-            .path
-            .strip_prefix(std::env::var("HOME").unwrap_or_default())
-            .map(|path| format!("~/{}", path.display()))
-            .unwrap_or_else(|_| self.path.display().to_string());
-        let full_path = self.path.display().to_string();
-
-        let titlebar = TitleBar::new()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .size(px(22.))
-                                    .rounded_md()
-                                    .bg(cx.theme().primary)
-                                    .text_color(cx.theme().primary_foreground)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(Icon::new(IconName::Terminal).xsmall()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child("Ghostty"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("/"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_medium()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(Text::new("설정", "Settings").s()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("titlebar-path")
-                            .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .px_2()
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(cx.theme().muted)
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .child(Icon::new(IconName::FileText).xsmall().text_color(cx.theme().muted_foreground))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_family("Menlo")
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(short_path),
-                                    ),
-                            ),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(
-                                Icon::new(IconName::Languages)
-                                    .xsmall()
-                                    .text_color(cx.theme().muted_foreground),
-                            )
-                            // Sized for the longest language name in
-                            // `Lang::ALL` plus the caret; revisit when a
-                            // longer native name joins the picker.
-                            .child(div().w(px(108.)).child(Select::new(&self.lang_select).small())),
-                    )
-                    .child(div().w(px(1.)).h(px(18.)).bg(cx.theme().border))
-                    .child(
-                        Button::new("reload")
-                            .ghost()
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .tooltip(Text::new("파일 다시 불러오기", "Reload file").s())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.revert(cx);
-                            })),
-                    )
-                    .child(
-                        if dirty {
-                            Button::new("revert")
-                                .outline()
-                                .small()
-                                .label(Text::new("변경 취소", "Discard changes").s())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.revert(cx);
-                                }))
-                        } else {
-                            Button::new("revert")
-                                .ghost()
-                                .small()
-                                .label(Text::new("변경 취소", "Discard changes").s())
-                                .disabled(true)
-                        },
-                    )
-                    .child(
-                        if dirty {
-                            Button::new("diff")
-                                .outline()
-                                .small()
-                                .icon(IconName::FileText)
-                                .label(Text::new("변경 미리보기", "Review changes").s())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.active_modal = Some(ActiveModal::DiffViewer);
-                                    cx.notify();
-                                }))
-                        } else {
-                            Button::new("diff")
-                                .ghost()
-                                .small()
-                                .icon(IconName::FileText)
-                                .label(Text::new("변경 미리보기", "Review changes").s())
-                                .disabled(true)
-                        },
-                    )
-                    .child(
-                        if dirty {
-                            Button::new("save")
-                                .primary()
-                                .small()
-                                .icon(IconName::Check)
-                                .label(Text::new("저장", "Save").s())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.save(cx);
-                                }))
-                        } else {
-                            Button::new("save")
-                                .outline()
-                                .small()
-                                .icon(IconName::Check)
-                                .label(Text::new("저장됨", "Saved").s())
-                                .disabled(true)
-                        },
-                    )
-                    .child(
-                        Button::new("toggle-preview")
-                            .outline()
-                            .small()
-                            .icon(IconName::PanelRight)
-                            .label(if self.show_preview { Text::new("미리보기 닫기", "Close preview").s() } else { Text::new("미리보기", "Preview").s() })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.show_preview = !this.show_preview;
-                                cx.notify();
-                            })),
-                    ),
-            );
-
-        titlebar.into_any_element()
-    }
 
     pub(super) fn option_table(
         &mut self,
@@ -453,6 +280,211 @@ impl SettingsView {
 }
 
 /// One destination in the sidebar's list.
+/// The actions the title bar can ask of the view.
+///
+/// Assembled in the render body, where the view's own handles are built, so a
+/// section can cause a state change only through a named action it was handed.
+/// Reload and discard both ask the view to re-read the file; the affordances
+/// stay separate because what they promise the user differs.
+pub(super) struct TitleBarActions {
+    pub(super) reload: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) discard: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) save: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) review_changes: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) toggle_preview: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+/// The title bar: which file is open, and the actions that act on the whole file.
+///
+/// Receives what it draws — the path, the dirty flag, whether the preview is
+/// open, the language picker as an entity handle — and the actions it can ask
+/// for. It cannot open a modal, save, or toggle a flag itself: which modal is
+/// open is view state, and the only door a section has to it is
+/// [`TitleBarActions::review_changes`].
+pub(super) fn title_bar(
+    path: &Path,
+    dirty: bool,
+    preview_open: bool,
+    lang_select: &Entity<SelectState<SearchableVec<SharedString>>>,
+    actions: &TitleBarActions,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let short_path = path
+        .strip_prefix(std::env::var("HOME").unwrap_or_default())
+        .map(|path| format!("~/{}", path.display()))
+        .unwrap_or_else(|_| path.display().to_string());
+    let full_path = path.display().to_string();
+
+    let reload = actions.reload.clone();
+    let discard = actions.discard.clone();
+    let save = actions.save.clone();
+    let review_changes = actions.review_changes.clone();
+    let toggle_preview = actions.toggle_preview.clone();
+
+    let titlebar = TitleBar::new()
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .size(px(22.))
+                                .rounded_md()
+                                .bg(cx.theme().primary)
+                                .text_color(cx.theme().primary_foreground)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(Icon::new(IconName::Terminal).xsmall()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .child("Ghostty"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("/"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(Text::new("설정", "Settings").s()),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .id("titlebar-path")
+                .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .px_2()
+                        .py(px(2.))
+                        .rounded_md()
+                        .bg(cx.theme().muted)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .child(Icon::new(IconName::FileText).xsmall().text_color(cx.theme().muted_foreground))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family("Menlo")
+                                .text_color(cx.theme().muted_foreground)
+                                .child(short_path),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .child(
+                            Icon::new(IconName::Languages)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        // Sized for the longest language name in
+                        // `Lang::ALL` plus the caret; revisit when a
+                        // longer native name joins the picker.
+                        .child(div().w(px(108.)).child(Select::new(lang_select).small())),
+                )
+                .child(div().w(px(1.)).h(px(18.)).bg(cx.theme().border))
+                .child(
+                    Button::new("reload")
+                        .ghost()
+                        .small()
+                        .icon(IconName::RefreshCw)
+                        .tooltip(Text::new("파일 다시 불러오기", "Reload file").s())
+                        .on_click(move |_, window, cx| {
+                            reload(window, cx);
+                        }),
+                )
+                .child(
+                    if dirty {
+                        Button::new("revert")
+                            .outline()
+                            .small()
+                            .label(Text::new("변경 취소", "Discard changes").s())
+                            .on_click(move |_, window, cx| {
+                                discard(window, cx);
+                            })
+                    } else {
+                        Button::new("revert")
+                            .ghost()
+                            .small()
+                            .label(Text::new("변경 취소", "Discard changes").s())
+                            .disabled(true)
+                    },
+                )
+                .child(
+                    if dirty {
+                        Button::new("diff")
+                            .outline()
+                            .small()
+                            .icon(IconName::FileText)
+                            .label(Text::new("변경 미리보기", "Review changes").s())
+                            .on_click(move |_, window, cx| {
+                                review_changes(window, cx);
+                            })
+                    } else {
+                        Button::new("diff")
+                            .ghost()
+                            .small()
+                            .icon(IconName::FileText)
+                            .label(Text::new("변경 미리보기", "Review changes").s())
+                            .disabled(true)
+                    },
+                )
+                .child(
+                    if dirty {
+                        Button::new("save")
+                            .primary()
+                            .small()
+                            .icon(IconName::Check)
+                            .label(Text::new("저장", "Save").s())
+                            .on_click(move |_, window, cx| {
+                                save(window, cx);
+                            })
+                    } else {
+                        Button::new("save")
+                            .outline()
+                            .small()
+                            .icon(IconName::Check)
+                            .label(Text::new("저장됨", "Saved").s())
+                            .disabled(true)
+                    },
+                )
+                .child(
+                    Button::new("toggle-preview")
+                        .outline()
+                        .small()
+                        .icon(IconName::PanelRight)
+                        .label(if preview_open { Text::new("미리보기 닫기", "Close preview").s() } else { Text::new("미리보기", "Preview").s() })
+                        .on_click(move |_, window, cx| {
+                            toggle_preview(window, cx);
+                        }),
+                ),
+        );
+
+    titlebar.into_any_element()
+}
+
 pub(super) struct NavItem {
     pub(super) label: SharedString,
     pub(super) icon: IconName,

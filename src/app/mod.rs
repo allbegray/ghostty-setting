@@ -587,6 +587,15 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// The one path that opens the diff viewer.
+    ///
+    /// Reviewing changes is a view-level action: which modal is open is view
+    /// state, and this is the only door a section has to it.
+    fn review_changes(&mut self, cx: &mut Context<Self>) {
+        self.active_modal = Some(ActiveModal::DiffViewer);
+        cx.notify();
+    }
+
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -746,7 +755,50 @@ fn doc_card(doc: &'static str, key: &'static str) -> impl IntoElement {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty();
-        let titlebar = self.title_bar(dirty, cx);
+        let view = cx.entity();
+        let actions = chrome::TitleBarActions {
+            reload: {
+                let view = view.clone();
+                Rc::new(move |_: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| this.revert(cx))
+                })
+            },
+            discard: {
+                let view = view.clone();
+                Rc::new(move |_: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| this.revert(cx))
+                })
+            },
+            save: {
+                let view = view.clone();
+                Rc::new(move |_: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| this.save(cx))
+                })
+            },
+            review_changes: {
+                let view = view.clone();
+                Rc::new(move |_: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| this.review_changes(cx))
+                })
+            },
+            toggle_preview: {
+                let view = view.clone();
+                Rc::new(move |_: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| {
+                        this.show_preview = !this.show_preview;
+                        cx.notify();
+                    })
+                })
+            },
+        };
+        let titlebar = chrome::title_bar(
+            &self.path,
+            dirty,
+            self.show_preview,
+            &self.lang_select,
+            &actions,
+            cx,
+        );
         let nav_items: Vec<chrome::NavItem> = CATEGORIES
             .iter()
             .map(|cat| chrome::NavItem {
@@ -776,8 +828,7 @@ impl Render for SettingsView {
         let content = self.option_table(window, cx);
         let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
 
-        let modal = self.active_modal.take();
-        let modal_overlay = match &modal {
+        let modal_overlay = match &self.active_modal {
             Some(ActiveModal::ListEditor {
                 key,
                 items,
@@ -805,7 +856,6 @@ impl Render for SettingsView {
             Some(ActiveModal::DiffViewer) => Some(self.render_diff_modal(cx)),
             None => None,
         };
-        self.active_modal = modal;
 
         let mut main_area = h_flex()
             .items_stretch()
