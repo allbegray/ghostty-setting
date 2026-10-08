@@ -359,6 +359,39 @@ pub enum ActiveModal {
     DiffViewer,
 }
 
+/// The text field for `key`, seeded from the file.
+///
+/// A free function over the file and the cache: the row's editor draws from
+/// those two and asks for changes through a handle, so it never needs the view.
+pub(super) fn input(
+    editors: &mut EditorCache,
+    file: &LineFile,
+    opt: &'static Opt,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> Entity<InputState> {
+    let key = opt.key;
+    let seed = file.get(key).unwrap_or_default();
+    editors.input(key, &seed, opt_hint_text(opt), window, cx)
+}
+
+/// The numeric field for `key`, seeded from the file or its default.
+pub(super) fn number_input(
+    editors: &mut EditorCache,
+    file: &LineFile,
+    key: &'static str,
+    default_val: &str,
+    min: f64,
+    max: f64,
+    step: f64,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> Entity<InputState> {
+    let seed = file.get(key).unwrap_or_else(|| default_val.to_string());
+    editors
+        .number_input(key, &seed, min, max, step, window, cx)
+}
+
 impl SettingsView {
     /// The list editor, when it is the open modal.
     ///
@@ -579,7 +612,9 @@ impl SettingsView {
         decision.edit.apply(key, &mut self.file);
         self.settle(key, decision.kept, cx);
     }
+}
 
+impl SettingsView {
     /// Replace every value of a repeatable option.
     fn commit_all(&mut self, key: &'static str, values: &[String], cx: &mut Context<Self>) {
         self.commit_decision(key, commit::list(values), cx);
@@ -603,34 +638,9 @@ impl SettingsView {
     fn set_count(&self) -> usize {
         query::set_count(&self.file, &self.search, self.category)
     }
-
-    fn get_or_create_input(
-        &mut self,
-        opt: &'static Opt,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        let key = opt.key;
-        let seed = self.file.get(key).unwrap_or_default();
-        let placeholder = opt_hint_text(opt);
-        self.editors.input(key, &seed, placeholder, window, cx)
-    }
-
-    fn get_or_create_number_input(
-        &mut self,
-        key: &'static str,
-        default_val: &str,
-        min: f64,
-        max: f64,
-        step: f64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
-        self.editors
-            .number_input(key, &seed, min, max, step, window, cx)
-    }
 }
+
+
 
 /// Where Ghostty documents one option. The reference page anchors every option
 /// by its own configuration key.
