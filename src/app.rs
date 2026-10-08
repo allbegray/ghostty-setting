@@ -55,21 +55,44 @@ use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
 use crate::config::{self};
 use crate::i18n::{self, Lang, Text};
 
-fn category_icon(idx: usize) -> IconName {
-    match idx {
-        0 => IconName::Type,
-        1 => IconName::Palette,
-        2 => IconName::AppWindow,
-        3 => IconName::PanelsTopLeft,
-        4 => IconName::MousePointer,
-        5 => IconName::Keyboard,
-        6 => IconName::Clipboard,
-        7 => IconName::Terminal,
-        8 => IconName::Settings,
+/// Icon for a sidebar destination, keyed by `Category::id`.
+///
+/// Keying off identity rather than position is what makes reordering
+/// `CATEGORIES` a data-only change.
+fn category_icon(id: &str) -> IconName {
+    match id {
+        "font" => IconName::Type,
+        "theme" => IconName::Palette,
+        "window" => IconName::AppWindow,
+        "tabs" => IconName::PanelsTopLeft,
+        "cursor" => IconName::MousePointer,
+        "keys" => IconName::Keyboard,
+        "selection" => IconName::Clipboard,
+        "shell" => IconName::Terminal,
+        "system" => IconName::Settings,
         _ => IconName::Zap,
     }
 }
 
+/// Editing ranges the UI narrows below the range Ghostty accepts.
+///
+/// The schema owns what is valid; a control may offer less so the useful part
+/// is reachable. Every entry must stay inside `Kind::bounds()` —
+/// `ui_ranges_stay_inside_schema_bounds` enforces that.
+const UI_RANGES: &[(&str, f64, f64)] = &[
+    ("font-size", 8.0, 72.0),
+    ("window-width", 20.0, 500.0),
+    ("window-height", 10.0, 200.0),
+];
+
+/// The range a numeric control offers: the narrowed UI range when one is
+/// declared, otherwise the schema's valid range.
+fn edit_bounds(opt: &Opt) -> (f64, f64) {
+    if let Some((_, min, max)) = UI_RANGES.iter().find(|(key, _, _)| *key == opt.key) {
+        return (*min, *max);
+    }
+    opt.kind.bounds().unwrap_or((0.0, 100.0))
+}
 actions!(settings, [Save, FocusSearch]);
 pub const GHOSTTY_ACTIONS: &[(&str, Text)] = &[
     ("copy_to_clipboard", Text::new("클립보드에 복사", "Copy to clipboard")),
@@ -2264,6 +2287,7 @@ fn value_widget(
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
             let key = opt.key;
             let current_val = this.file.get(key).unwrap_or_default();
+            let (bound_min, bound_max) = edit_bounds(opt);
 
             match key {
                 "font-size" => render_bounded_slider_number(
@@ -2271,8 +2295,8 @@ fn value_widget(
                     key,
                     &current_val,
                     13.0,
-                    8.0,
-                    72.0,
+                    bound_min,
+                    bound_max,
                     1.0,
                     true,
                     Some("pt"),
@@ -2284,8 +2308,8 @@ fn value_widget(
                     key,
                     &current_val,
                     1.0,
-                    0.0,
-                    1.0,
+                    bound_min,
+                    bound_max,
                     0.05,
                     true,
                     None,
@@ -2297,8 +2321,8 @@ fn value_widget(
                     key,
                     &current_val,
                     1.0,
-                    0.0,
-                    1.0,
+                    bound_min,
+                    bound_max,
                     0.05,
                     true,
                     None,
@@ -2310,8 +2334,8 @@ fn value_widget(
                     key,
                     &current_val,
                     1.0,
-                    1.0,
-                    21.0,
+                    bound_min,
+                    bound_max,
                     0.5,
                     true,
                     None,
@@ -2319,7 +2343,7 @@ fn value_widget(
                     cx,
                 ),
                 "window-width" => {
-                    let num_state = this.get_or_create_number_input(key, "80", 20.0, 500.0, 10.0, window, cx);
+                    let num_state = this.get_or_create_number_input(key, "80", bound_min, bound_max, 10.0, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
                         div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("열", "cols").s()),
                     );
@@ -2331,7 +2355,7 @@ fn value_widget(
                         .into_any_element()
                 }
                 "window-height" => {
-                    let num_state = this.get_or_create_number_input(key, "24", 10.0, 200.0, 5.0, window, cx);
+                    let num_state = this.get_or_create_number_input(key, "24", bound_min, bound_max, 5.0, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
                         div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("행", "rows").s()),
                     );
@@ -2347,8 +2371,8 @@ fn value_widget(
                     key,
                     &current_val,
                     0.0,
-                    0.0,
-                    255.0,
+                    bound_min,
+                    bound_max,
                     16.0,
                     false,
                     None,
@@ -3224,7 +3248,7 @@ impl Render for SettingsView {
             let selected = self.search.is_empty() && i == self.category;
             let view = view.clone();
             SidebarMenuItem::new(cat.label.s())
-                .icon(category_icon(i))
+                .icon(category_icon(cat.id))
                 .active(selected)
                 .suffix(move |_, cx| {
                     if set > 0 {
@@ -3262,7 +3286,11 @@ impl Render for SettingsView {
 
         let heading = if self.search.is_empty() {
             let cat = &CATEGORIES[self.category];
-(cat.label.s().to_string(), cat.desc.s().to_string(), Some(category_icon(self.category)))
+            (
+                cat.label.s().to_string(),
+                cat.desc.s().to_string(),
+                Some(category_icon(cat.id)),
+            )
         } else {
             (
                 Text::new("검색 결과 ({}개)", "Search results ({})")
@@ -3698,6 +3726,39 @@ mod tests {
         assert_eq!(action_description("unknown_action_xyz"), None);
 
         i18n::set(restore);
+    }
+
+    /// The UI may offer less than Ghostty accepts, but never more: a narrowed
+    /// range that escapes the valid range would let a control write a value
+    /// the config rejects.
+    #[test]
+    fn ui_ranges_stay_inside_schema_bounds() {
+        for (key, min, max) in UI_RANGES {
+            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
+            let (valid_min, valid_max) = opt
+                .kind
+                .bounds()
+                .unwrap_or_else(|| panic!("{key} is not numeric"));
+            assert!(
+                valid_min <= *min && *max <= valid_max,
+                "{key}: UI range {min}..{max} escapes the valid range {valid_min}..{valid_max}"
+            );
+        }
+    }
+
+    /// A category that falls through to the fallback icon is a category whose
+    /// id no longer matches the icon table.
+    #[test]
+    fn every_category_has_its_own_icon() {
+        for cat in CATEGORIES {
+            assert_ne!(
+                category_icon(cat.id),
+                IconName::Zap,
+                "category '{}' (id '{}') fell through to the fallback icon",
+                cat.label.s(),
+                cat.id
+            );
+        }
     }
 
     /// Every row links to the option's own anchor on Ghostty's reference page,

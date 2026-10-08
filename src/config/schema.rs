@@ -19,6 +19,20 @@ pub enum Kind {
     Flags(&'static [&'static str]),
 }
 
+impl Kind {
+    /// The range Ghostty accepts for a numeric option.
+    ///
+    /// This is the valid range, not the range a control offers: a slider may
+    /// deliberately narrow it, and `app::UI_RANGES` records those choices.
+    pub fn bounds(&self) -> Option<(f64, f64)> {
+        match self {
+            Kind::Int { min, max } => Some((*min as f64, *max as f64)),
+            Kind::Float { min, max } => Some((*min, *max)),
+            _ => None,
+        }
+    }
+}
+
 pub struct Opt {
     pub key: &'static str,
     pub label: Text,
@@ -38,6 +52,10 @@ impl Opt {
 }
 
 pub struct Category {
+    /// Stable identity for the destination. Presentation facts — the sidebar
+    /// icon above all — key off this rather than off a position in
+    /// [`CATEGORIES`], so reordering the list cannot relabel them.
+    pub id: &'static str,
     pub label: Text,
     pub desc: Text,
     pub keys: &'static [&'static str],
@@ -1592,6 +1610,7 @@ pub static OPTS: &[Opt] = &[
 
 pub static CATEGORIES: &[Category] = &[
     Category {
+        id: "font",
         label: Text::new("글꼴", "Fonts"),
         desc: Text::new("글꼴 계열, 굵기/기울임, 크기, OpenType 기능, 셀/밑줄 미세 조정", "Font families, weight and slant, size, OpenType features, cell and underline fine-tuning"),
         keys: &[
@@ -1630,6 +1649,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "theme",
         label: Text::new("테마 · 색상", "Theme & color"),
         desc: Text::new("프리셋 테마, 배경/글자색, 투명도/블러, 배경 이미지, 16색 팔레트", "Preset themes, background and foreground colors, opacity, blur, background images, 16-color palette"),
         keys: &[
@@ -1665,6 +1685,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "window",
         label: Text::new("창 · 레이아웃", "Window & layout"),
         desc: Text::new("창 크기/위치/패딩, 타이틀바, 전체화면, macOS/GTK 창 장식 및 종료 동작", "Window size, position and padding, titlebar, fullscreen, macOS/GTK decorations and close behavior"),
         keys: &[
@@ -1702,6 +1723,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "tabs",
         label: Text::new("탭 · 분할 · 퀵 터미널", "Tabs, splits & quick terminal"),
         desc: Text::new("탭 표시/위치, 분할창 동작, 퀵 터미널 위치/단축/애니메이션", "Tab bar display and location, split pane behavior, quick terminal position, shortcut and animation"),
         keys: &[
@@ -1723,6 +1745,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "cursor",
         label: Text::new("커서 · 마우스 · 스크롤", "Cursor, mouse & scroll"),
         desc: Text::new("커서 모양/색상/깜빡임, 마우스 휠 감도, 포커스 추적, 스크롤백 및 스크롤바", "Cursor shape, color and blinking, wheel sensitivity, focus tracking, scrollback and scrollbar"),
         keys: &[
@@ -1747,6 +1770,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "keys",
         label: Text::new("단축키 · 입력", "Shortcuts & input"),
         desc: Text::new("단축키 매핑, 키 리맵, 커맨드 팔레트, Alt 키 동작, 보안 입력", "Key binding mappings, key remaps, command palette, Alt key behavior, secure input"),
         keys: &[
@@ -1763,6 +1787,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "selection",
         label: Text::new("선택 · 링크 · 클립보드", "Selection, links & clipboard"),
         desc: Text::new("텍스트 선택 색상/동작, 클립보드 보안/보호, URL 링크 감지 및 미리보기", "Text selection colors and behavior, clipboard protection, URL link detection and previews"),
         keys: &[
@@ -1783,6 +1808,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "shell",
         label: Text::new("셸 · 실행 환경", "Shell & runtime"),
         desc: Text::new("기본 셸 명령어, 작업 디렉터리, 셸 통합, 환경 변수, Linux cgroup", "Default shell command, working directory, shell integration, environment variables, Linux cgroup"),
         keys: &[
@@ -1808,6 +1834,7 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "system",
         label: Text::new("시스템 · 알림 · 그래픽", "System, alerts & graphics"),
         desc: Text::new("명령어 완료 알림, 벨 소리/볼륨, 자동 업데이트, 커스텀 셰이더, 앱 아이콘", "Command finish notifications, bell sound and volume, auto-update, custom shaders, app icon"),
         keys: &[
@@ -1898,6 +1925,22 @@ mod tests {
 
         assert_eq!(count, 200);
         assert_eq!(seen.len(), 200);
+    }
+
+    /// Category identity is what the view's icon table keys off, so a missing
+    /// or duplicated id would silently give two destinations the same icon.
+    #[test]
+    fn test_category_ids_are_unique() {
+        let mut seen = HashSet::new();
+        for cat in CATEGORIES {
+            assert!(!cat.id.is_empty(), "category '{}' has no id", cat.label.get(crate::i18n::Lang::Ko));
+            assert!(
+                seen.insert(cat.id),
+                "duplicate category id '{}'",
+                cat.id
+            );
+        }
+        assert_eq!(seen.len(), CATEGORIES.len());
     }
 
     /// Every option carries copy in both languages, and every key that is
