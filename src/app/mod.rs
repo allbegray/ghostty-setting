@@ -590,7 +590,7 @@ impl SettingsView {
     /// The one path that opens the diff viewer.
     ///
     /// Reviewing changes is a view-level action: which modal is open is view
-    /// state, and this is the only door a section has to it.
+    /// state, and this is the door a section has to it.
     fn review_changes(&mut self, cx: &mut Context<Self>) {
         self.active_modal = Some(ActiveModal::DiffViewer);
         cx.notify();
@@ -752,50 +752,40 @@ fn doc_card(doc: &'static str, key: &'static str) -> impl IntoElement {
 }
 
 
+/// A title-bar action: the view, doing one thing.
+///
+/// The render body is the only place holding the view's own handle, so it is
+/// the only place that can build these. A section receives the closure and
+/// nothing else.
+fn view_action(
+    view: &Entity<SettingsView>,
+    action: impl Fn(&mut SettingsView, &mut Context<SettingsView>) + 'static,
+) -> Rc<dyn Fn(&mut Window, &mut App)> {
+    let view = view.clone();
+    Rc::new(move |_: &mut Window, cx: &mut App| view.update(cx, |this, cx| action(this, cx)))
+}
+
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty();
         let view = cx.entity();
         let actions = chrome::TitleBarActions {
-            reload: {
-                let view = view.clone();
-                Rc::new(move |_: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| this.revert(cx))
-                })
-            },
-            discard: {
-                let view = view.clone();
-                Rc::new(move |_: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| this.revert(cx))
-                })
-            },
-            save: {
-                let view = view.clone();
-                Rc::new(move |_: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| this.save(cx))
-                })
-            },
-            review_changes: {
-                let view = view.clone();
-                Rc::new(move |_: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| this.review_changes(cx))
-                })
-            },
-            toggle_preview: {
-                let view = view.clone();
-                Rc::new(move |_: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| {
-                        this.show_preview = !this.show_preview;
-                        cx.notify();
-                    })
-                })
-            },
+            reload: view_action(&view, |this, cx| this.revert(cx)),
+            discard: view_action(&view, |this, cx| this.revert(cx)),
+            save: view_action(&view, |this, cx| this.save(cx)),
+            review_changes: view_action(&view, |this, cx| this.review_changes(cx)),
+            toggle_preview: view_action(&view, |this, cx| {
+                this.show_preview = !this.show_preview;
+                cx.notify();
+            }),
         };
         let titlebar = chrome::title_bar(
-            &self.path,
-            dirty,
-            self.show_preview,
-            &self.lang_select,
+            &chrome::TitleBarInput {
+                path: &self.path,
+                dirty,
+                preview_open: self.show_preview,
+                lang_select: &self.lang_select,
+            },
             &actions,
             cx,
         );
@@ -804,7 +794,7 @@ impl Render for SettingsView {
             .map(|cat| chrome::NavItem {
                 label: cat.label.s().into(),
                 icon: category_icon(cat.id),
-                set: cat
+                set_count: cat
                     .keys
                     .iter()
                     .filter(|k| lookup(k).is_some_and(|o| self.is_set(o)))
@@ -818,10 +808,12 @@ impl Render for SettingsView {
             },
         ));
         let sidebar = chrome::nav_sidebar(
-            &nav_items,
-            self.category,
-            self.search.is_empty(),
-            &self.search_input,
+            &chrome::NavSidebarInput {
+                items: &nav_items,
+                active: self.category,
+                searching: self.search.is_empty(),
+                search_input: &self.search_input,
+            },
             on_pick_category,
             cx,
         );

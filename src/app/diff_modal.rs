@@ -1,7 +1,9 @@
 //! The diff viewer: what saving would write, beside what the file holds now.
 //!
-//! A section like the list editor: the view owns which modal is open, this
-//! section draws it.
+//! A section like the list editor — the view owns which modal is open, and
+//! this section draws it. Unlike the chrome sections it still arrives as a
+//! method on the view, because it reads the file directly; moving it to a
+//! snapshot is part of the modals' own seam work, not the chrome split.
 
 use super::*;
 

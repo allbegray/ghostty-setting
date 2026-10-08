@@ -24,7 +24,9 @@ code is wrong — fix the file or the code, never leave both standing.
 ## The architecture
 
 - **section** — one standing part of the window: title bar, nav sidebar, option
-  table, status bar, preview panel. A section draws; the view owns state.
+  table, status bar, preview panel. A section draws; the view owns state. Until
+  its seam lands a section may still arrive as a method on the view — the
+  option table and both modals do, because they read the file directly.
 - **snapshot** — the plain data a section draws, handed to it as an input struct.
   A section receives a snapshot of the fields it draws, never `&SettingsView`.
 - **section message** — a value a section sends back to the view to ask for a

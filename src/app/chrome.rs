@@ -3,9 +3,16 @@
 //!
 //! `Render::render` used to build all four in one 609-line body that read nine
 //! of the view's fields, so changing one section meant reading past the other
-//! three. Each section is a method here, taking only what it draws: the title
-//! bar takes the dirty flag, the table takes the window because it builds rows,
-//! and the sidebar and status bar take nothing but the context.
+//! three. The split that followed produced files; the seams came after. Each
+//! section is now a free function taking a snapshot of what it draws plus the
+//! actions it can ask of the view, both assembled in the render body — no
+//! section can name a view field. The option table is the exception, and
+//! deliberately: building a row creates that row's editors, so it still takes
+//! the view until the row's own seam lands.
+//!
+//! The status bar's snapshot is two plain values, so it takes them directly
+//! rather than wearing a two-field struct. The other sections bundle theirs:
+//! what travels together is named.
 
 use gpui_kit::App;
 
@@ -279,7 +286,6 @@ impl SettingsView {
     }
 }
 
-/// One destination in the sidebar's list.
 /// The actions the title bar can ask of the view.
 ///
 /// Assembled in the render body, where the view's own handles are built, so a
@@ -294,21 +300,32 @@ pub(super) struct TitleBarActions {
     pub(super) toggle_preview: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
+/// What the title bar draws: the file's path, whether the file has changes,
+/// whether the preview is open, and the language picker as an entity handle.
+pub(super) struct TitleBarInput<'a> {
+    pub(super) path: &'a Path,
+    pub(super) dirty: bool,
+    pub(super) preview_open: bool,
+    pub(super) lang_select: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+}
+
 /// The title bar: which file is open, and the actions that act on the whole file.
 ///
-/// Receives what it draws — the path, the dirty flag, whether the preview is
-/// open, the language picker as an entity handle — and the actions it can ask
-/// for. It cannot open a modal, save, or toggle a flag itself: which modal is
-/// open is view state, and the only door a section has to it is
+/// Receives what it draws and the actions it can ask for. It cannot open a
+/// modal, save, or toggle a flag itself: which modal is open is view state,
+/// and asking the view to show the diff viewer goes through
 /// [`TitleBarActions::review_changes`].
 pub(super) fn title_bar(
-    path: &Path,
-    dirty: bool,
-    preview_open: bool,
-    lang_select: &Entity<SelectState<SearchableVec<SharedString>>>,
+    input: &TitleBarInput<'_>,
     actions: &TitleBarActions,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
+    let TitleBarInput {
+        path,
+        dirty,
+        preview_open,
+        lang_select,
+    } = *input;
     let short_path = path
         .strip_prefix(std::env::var("HOME").unwrap_or_default())
         .map(|path| format!("~/{}", path.display()))
@@ -485,10 +502,22 @@ pub(super) fn title_bar(
     titlebar.into_any_element()
 }
 
+/// One destination in the sidebar's list: its label, its icon, and how many of
+/// the category's options the file has set.
 pub(super) struct NavItem {
     pub(super) label: SharedString,
     pub(super) icon: IconName,
-    pub(super) set: usize,
+    pub(super) set_count: usize,
+}
+
+/// What the sidebar draws: the categories as snapshot rows, which one is active,
+/// whether a search is filtering the table, and the search field as an entity
+/// handle.
+pub(super) struct NavSidebarInput<'a> {
+    pub(super) items: &'a [NavItem],
+    pub(super) active: usize,
+    pub(super) searching: bool,
+    pub(super) search_input: &'a Entity<InputState>,
 }
 
 /// The standing navigation: the search field, then one entry per category.
@@ -497,17 +526,20 @@ pub(super) struct NavItem {
 /// learns which view field holds the selected category, or that the file is
 /// what says how many options a category has set.
 pub(super) fn nav_sidebar(
-    items: &[NavItem],
-    active: usize,
-    searching: bool,
-    search_input: &Entity<InputState>,
+    input: &NavSidebarInput<'_>,
     on_pick: Rc<dyn Fn(&usize, &mut Window, &mut App)>,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
+    let NavSidebarInput {
+        items,
+        active,
+        searching,
+        search_input,
+    } = *input;
     let menu = SidebarMenu::new().children(items.iter().enumerate().map(|(i, item)| {
         let on_pick = on_pick.clone();
         let label = item.label.clone();
-        let set = item.set;
+        let set = item.set_count;
         SidebarMenuItem::new(label)
             .icon(item.icon)
             .active(!searching && i == active)
