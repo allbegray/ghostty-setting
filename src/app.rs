@@ -3253,6 +3253,8 @@ impl Render for SettingsView {
             let total = opts.len();
             v_flex()
                 .w_full()
+                .flex_none()
+                .h_auto()
                 .rounded_xl()
                 .border_1()
                 .border_color(cx.theme().border)
@@ -3303,7 +3305,6 @@ impl Render for SettingsView {
                     row(self, opt, i == total - 1, window, cx)
                 }))
         };
-
         let scroll_area = div()
             .id("option-scroll-area")
             .size_full()
@@ -3315,9 +3316,10 @@ impl Render for SettingsView {
             .pb_6()
             .child(list);
 
-        let thumb_bg = cx.theme().muted_foreground.opacity(0.45);
+        let thumb_bg = cx.theme().muted_foreground.opacity(0.75);
         let thumb_hover = cx.theme().primary;
-        let track_bg = cx.theme().muted.opacity(0.25);
+        let track_bg = cx.theme().muted.opacity(0.4);
+        let track_border = cx.theme().border;
 
         let content = v_flex()
             .flex_1()
@@ -3341,10 +3343,29 @@ impl Render for SettingsView {
                                     .viewport_from_layout()
                                     .styles(move |styles| {
                                         styles
-                                            .track(move |t| t.bg(track_bg).width(px(8.)))
-                                            .thumb(move |t| t.bg(thumb_bg).width(px(8.)).radius(px(4.)))
-                                            .thumb_hover(move |t| t.bg(thumb_hover).width(px(8.)).radius(px(4.)))
-                                            .thumb_active(move |t| t.bg(thumb_hover).width(px(8.)).radius(px(4.)))
+                                            .track(move |t| {
+                                                t.bg(track_bg)
+                                                    .border_color(track_border)
+                                                    .width(px(12.))
+                                            })
+                                            .thumb(move |t| {
+                                                t.bg(thumb_bg)
+                                                    .width(px(10.))
+                                                    .inset(px(1.))
+                                                    .radius(px(5.))
+                                            })
+                                            .thumb_hover(move |t| {
+                                                t.bg(thumb_hover)
+                                                    .width(px(10.))
+                                                    .inset(px(1.))
+                                                    .radius(px(5.))
+                                            })
+                                            .thumb_active(move |t| {
+                                                t.bg(thumb_hover)
+                                                    .width(px(10.))
+                                                    .inset(px(1.))
+                                                    .radius(px(5.))
+                                            })
                                     }),
                             ),
                     ),
