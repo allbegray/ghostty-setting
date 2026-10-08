@@ -51,6 +51,7 @@ use gpui_kit::{
 use gpui_kit::base::Disableable as _;
 
 mod chrome;
+mod controls;
 mod diff_modal;
 mod editor;
 mod editors;
@@ -86,25 +87,6 @@ fn category_icon(id: &str) -> IconName {
     }
 }
 
-/// Editing ranges the UI narrows below the range Ghostty accepts.
-///
-/// The schema owns what is valid; a control may offer less so the useful part
-/// is reachable. Every entry must stay inside `Kind::bounds()` —
-/// `ui_ranges_stay_inside_schema_bounds` enforces that.
-const UI_RANGES: &[(&str, f64, f64)] = &[
-    ("font-size", 8.0, 72.0),
-    ("window-width", 20.0, 500.0),
-    ("window-height", 10.0, 200.0),
-];
-
-/// The range a numeric control offers: the narrowed UI range when one is
-/// declared, otherwise the schema's valid range.
-fn edit_bounds(opt: &Opt) -> (f64, f64) {
-    if let Some((_, min, max)) = UI_RANGES.iter().find(|(key, _, _)| *key == opt.key) {
-        return (*min, *max);
-    }
-    opt.kind.bounds().unwrap_or((0.0, 100.0))
-}
 actions!(settings, [Save, FocusSearch]);
 pub const GHOSTTY_ACTIONS: &[(&str, Text)] = &[
     ("copy_to_clipboard", Text::new("클립보드에 복사", "Copy to clipboard")),
@@ -900,24 +882,6 @@ mod tests {
         assert_eq!(action_description("unknown_action_xyz"), None);
 
         i18n::set(restore);
-    }
-
-    /// The UI may offer less than Ghostty accepts, but never more: a narrowed
-    /// range that escapes the valid range would let a control write a value
-    /// the config rejects.
-    #[test]
-    fn ui_ranges_stay_inside_schema_bounds() {
-        for (key, min, max) in UI_RANGES {
-            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
-            let (valid_min, valid_max) = opt
-                .kind
-                .bounds()
-                .unwrap_or_else(|| panic!("{key} is not numeric"));
-            assert!(
-                valid_min <= *min && *max <= valid_max,
-                "{key}: UI range {min}..{max} escapes the valid range {valid_min}..{valid_max}"
-            );
-        }
     }
 
     /// A category that falls through to the fallback icon is a category whose

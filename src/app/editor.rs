@@ -5,6 +5,7 @@
 //! knows only the option, the view and the window.
 
 use super::*;
+use super::controls;
 use super::list_editor::ListEditorModal;
 use super::list_items::ListItems;
 use crate::app::value::{self, Stored};
@@ -221,98 +222,38 @@ pub(super) fn value_editor(
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
             let key = opt.key;
             let current_val = this.file.get(key).unwrap_or_default();
-            let (bound_min, bound_max) = edit_bounds(opt);
+            let (bound_min, bound_max) = controls::edit_bounds(opt);
 
+            if let Some(slider) = controls::slider(key) {
+                return render_bounded_slider_number(
+                    this,
+                    key,
+                    &current_val,
+                    slider.default,
+                    bound_min,
+                    bound_max,
+                    slider.step,
+                    true,
+                    slider.unit,
+                    window,
+                    cx,
+                );
+            }
             match key {
-                "font-size" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    13.0,
-                    bound_min,
-                    bound_max,
-                    1.0,
-                    true,
-                    Some("pt"),
-                    window,
-                    cx,
-                ),
-                "background-opacity" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.05,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "cursor-opacity" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.05,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "minimum-contrast" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.5,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "window-width" => {
-                    let num_state = this.get_or_create_number_input(key, "80", bound_min, bound_max, 10.0, window, cx);
+                "window-width" | "window-height" => {
+                    let field = controls::size_field(key).expect("the window sizes have a field");
+                    let num_state = this.get_or_create_number_input(key, field.default, bound_min, bound_max, field.step, window, cx);
+                    let unit = field.unit.unwrap_or("");
                     let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("열", "cols").s()),
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new(unit, unit).s()),
                     );
                     h_flex()
                         .gap_2()
                         .items_center()
                         .child(div().w(px(120.)).child(num_input))
-                        .child(render_chips_only(key, &current_val, &[("80", "80"), ("100", "100"), ("120", "120"), ("140", "140")], cx.entity(), cx))
+                        .child(render_chips_only(key, &current_val, controls::size_chips(key).expect("the window sizes have chips"), cx.entity(), cx))
                         .into_any_element()
                 }
-                "window-height" => {
-                    let num_state = this.get_or_create_number_input(key, "24", bound_min, bound_max, 5.0, window, cx);
-                    let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("행", "rows").s()),
-                    );
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(div().w(px(120.)).child(num_input))
-                        .child(render_chips_only(key, &current_val, &[("24", "24"), ("30", "30"), ("40", "40"), ("50", "50")], cx.entity(), cx))
-                        .into_any_element()
-                }
-                "font-thicken-strength" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    0.0,
-                    bound_min,
-                    bound_max,
-                    16.0,
-                    false,
-                    None,
-                    window,
-                    cx,
-                ),
                 "working-directory" => {
                     let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     h_flex()
@@ -382,12 +323,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            ("/bin/zsh", "/bin/zsh"),
-                            ("/bin/bash", "/bin/bash"),
-                            ("fish", "/opt/homebrew/bin/fish"),
-                            ("tmux", "tmux"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -398,14 +334,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            (Text::new("끔 (false)", "Off (false)").s(), "false"),
-                            (Text::new("은은하게 (10)", "Subtle (10)").s(), "10"),
-                            (Text::new("기본 (20)", "Default (20)").s(), "20"),
-                            (Text::new("강하게 (40)", "Strong (40)").s(), "40"),
-                            ("Glass Regular", "macos-glass-regular"),
-                            ("Glass Clear", "macos-glass-clear"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -416,14 +345,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            ("10MB", "10000000"),
-                            ("50MB", "50000000"),
-                            ("100MB", "100000000"),
-                            ("500MB", "500000000"),
-                            ("1GB", "1000000000"),
-                            (Text::new("무제한 (0)", "Unlimited (0)").s(), "0"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -434,14 +356,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            ("0", "0"),
-                            ("4", "4"),
-                            ("8", "8"),
-                            ("12", "12"),
-                            ("16", "16"),
-                            ("24", "24"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -452,12 +367,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            (Text::new("1x (느림)", "1x (slow)").s(), "1"),
-                            ("2x", "2"),
-                            (Text::new("3x (기본)", "3x (default)").s(), "3"),
-                            (Text::new("5x (빠름)", "5x (fast)").s(), "5"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -468,15 +378,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[
-                            ("-1", "-1"),
-                            ("0", "0"),
-                            ("+1", "1"),
-                            ("+2", "2"),
-                            ("-5%", "-5%"),
-                            ("+5%", "5%"),
-                            ("+10%", "10%"),
-                        ],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
@@ -487,7 +389,7 @@ pub(super) fn value_editor(
                         &state,
                         key,
                         &current_val,
-                        &[(Text::new("기본값 복원", "Restore default").s(), "\\\\t'\\\"│`|:;,()[]{}<>$")],
+                        controls::chips(key).expect("this option has chips"),
                         cx.entity(),
                         cx,
                     )
