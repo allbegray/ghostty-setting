@@ -16,6 +16,7 @@
 //! - 4-lane aligned layout (option, value, state, reset action).
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -42,7 +43,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Anchor, AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    Anchor, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
     InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions,
     div, px,
@@ -746,7 +747,32 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty();
         let titlebar = self.title_bar(dirty, cx);
-        let sidebar = self.nav_sidebar(cx);
+        let nav_items: Vec<chrome::NavItem> = CATEGORIES
+            .iter()
+            .map(|cat| chrome::NavItem {
+                label: cat.label.s().into(),
+                icon: category_icon(cat.id),
+                set: cat
+                    .keys
+                    .iter()
+                    .filter(|k| lookup(k).is_some_and(|o| self.is_set(o)))
+                    .count(),
+            })
+            .collect();
+        let on_pick_category: Rc<dyn Fn(&usize, &mut Window, &mut App)> = Rc::new(cx.listener(
+            |this: &mut SettingsView, ix: &usize, _: &mut Window, cx: &mut Context<SettingsView>| {
+                this.category = *ix;
+                cx.notify();
+            },
+        ));
+        let sidebar = chrome::nav_sidebar(
+            &nav_items,
+            self.category,
+            self.search.is_empty(),
+            &self.search_input,
+            on_pick_category,
+            cx,
+        );
         let content = self.option_table(window, cx);
         let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
 

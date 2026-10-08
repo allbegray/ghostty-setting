@@ -9,6 +9,8 @@
 
 use gpui_kit::App;
 
+use std::rc::Rc;
+
 use super::*;
 
 impl SettingsView {
@@ -185,56 +187,6 @@ impl SettingsView {
             );
 
         titlebar.into_any_element()
-    }
-
-    pub(super) fn nav_sidebar(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let view = cx.entity();
-        let menu = SidebarMenu::new().children(CATEGORIES.iter().enumerate().map(|(i, cat)| {
-            let set = cat
-                .keys
-                .iter()
-                .filter(|k| lookup(k).is_some_and(|o| self.is_set(o)))
-                .count();
-            let selected = self.search.is_empty() && i == self.category;
-            let view = view.clone();
-            SidebarMenuItem::new(cat.label.s())
-                .icon(category_icon(cat.id))
-                .active(selected)
-                .suffix(move |_, cx| {
-                    if set > 0 {
-                        div()
-                            .px_1p5()
-                            .py(px(1.))
-                            .rounded_full()
-                            .text_xs()
-                            .font_medium()
-                            .bg(cx.theme().primary.opacity(0.12))
-                            .text_color(cx.theme().primary)
-                            .child(set.to_string())
-                            .into_any_element()
-                    } else {
-                        div().into_any_element()
-                    }
-                })
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| {
-                        this.category = i;
-                        cx.notify();
-                    });
-                })
-        }));
-
-        let sidebar = Sidebar::new("nav")
-            .collapsible(false)
-            .header(
-                Input::new(&self.search_input)
-                    .small()
-                    .cleanable(true)
-                    .prefix(Icon::new(IconName::Search).small().text_color(cx.theme().muted_foreground)),
-            )
-            .child(menu);
-
-        sidebar.into_any_element()
     }
 
     pub(super) fn option_table(
@@ -498,6 +450,67 @@ impl SettingsView {
 
         content.into_any_element()
     }
+}
+
+/// One destination in the sidebar's list.
+pub(super) struct NavItem {
+    pub(super) label: SharedString,
+    pub(super) icon: IconName,
+    pub(super) set: usize,
+}
+
+/// The standing navigation: the search field, then one entry per category.
+///
+/// Receives a snapshot of what it draws and one action to ask with. It never
+/// learns which view field holds the selected category, or that the file is
+/// what says how many options a category has set.
+pub(super) fn nav_sidebar(
+    items: &[NavItem],
+    active: usize,
+    searching: bool,
+    search_input: &Entity<InputState>,
+    on_pick: Rc<dyn Fn(&usize, &mut Window, &mut App)>,
+    cx: &mut App,
+) -> gpui_kit::AnyElement {
+    let menu = SidebarMenu::new().children(items.iter().enumerate().map(|(i, item)| {
+        let on_pick = on_pick.clone();
+        let label = item.label.clone();
+        let set = item.set;
+        SidebarMenuItem::new(label)
+            .icon(item.icon)
+            .active(!searching && i == active)
+            .suffix(move |_, cx| {
+                if set > 0 {
+                    div()
+                        .px_1p5()
+                        .py(px(1.))
+                        .rounded_full()
+                        .text_xs()
+                        .font_medium()
+                        .bg(cx.theme().primary.opacity(0.12))
+                        .text_color(cx.theme().primary)
+                        .child(set.to_string())
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }
+            })
+            .on_click(move |_, window, cx| {
+                on_pick(&i, window, cx);
+            })
+    }));
+
+    let sidebar = Sidebar::new("nav")
+        .collapsible(false)
+        .header(
+            Input::new(search_input)
+                .small()
+                .cleanable(true)
+                .prefix(Icon::new(IconName::Search).small().text_color(cx.theme().muted_foreground)),
+        )
+        .child(menu);
+
+    sidebar.into_any_element()
 }
 
 pub(super) fn status_bar(notice: Option<&str>, dirty: bool, cx: &App) -> gpui_kit::AnyElement {
