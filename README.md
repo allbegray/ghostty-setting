@@ -22,17 +22,24 @@ options, grouped into nine categories, with a live terminal preview beside the l
 ## Install
 
 ```sh
+# install
 curl -fsSL https://raw.githubusercontent.com/allbegray/ghostty-setting/main/install.sh | sh
+
+# remove
+curl -fsSL https://raw.githubusercontent.com/allbegray/ghostty-setting/main/install.sh | sh -s -- --uninstall
 ```
 
-Takes the prebuilt binary for your Mac from the latest release and puts it in
-`~/.local/bin`. If there is no prebuilt binary for your machine, the script
-builds from source with cargo instead — so Rust is only needed in that case.
+Install takes the prebuilt binary for your Mac from the latest release and puts it
+in `~/.local/bin`; if there is no prebuilt binary for your machine it builds from
+source with cargo instead, so Rust is only needed in that case. Remove takes back
+whichever of the two it created — the binary only, never your Ghostty
+configuration.
 
 With Rust installed, either path works on its own:
 
 ```sh
 cargo install --git https://github.com/allbegray/ghostty-setting --locked
+cargo uninstall ghostty-setting
 ```
 
 ## Build and run
