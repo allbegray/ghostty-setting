@@ -30,6 +30,27 @@ pub(crate) struct ListEditorModal {
 }
 
 /// Which list a key holds, derived once from the key.
+impl ListEditorModal {
+    /// Add what the typed input holds, then clear it.
+    ///
+    /// The three text-input shapes (feature, config path, generic item) share
+    /// this: read the field, add through the list, clear the field, re-render.
+    /// A blank value adds nothing and leaves the field alone.
+    pub(crate) fn add_typed_item(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<SettingsView>,
+    ) -> bool {
+        let value = self.new_item_input.read(cx).value().to_string();
+        if !self.items.add(&value) {
+            return false;
+        }
+        self.new_item_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        true
+    }
+}
+
 pub(crate) enum ListKind {
     Plain,
     Font,
@@ -571,11 +592,7 @@ impl SettingsView {
                         .label(Text::new("경로 추가", "Add path").s())
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(modal) = this.list_editor() {
-                                let val = modal.new_item_input.read(cx).value().to_string();
-                                if modal.items.add(&val) {
-                                    modal.new_item_input.update(cx, |inp, cx| {
-                                        inp.set_value("", window, cx);
-                                    });
+                                if modal.add_typed_item(window, cx) {
                                     cx.notify();
                                 }
                             }
@@ -621,11 +638,7 @@ impl SettingsView {
                                 .label(Text::new("추가", "Add").s())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(modal) = this.list_editor() {
-                                        let val = modal.new_item_input.read(cx).value().to_string();
-                                        if modal.items.add(&val) {
-                                            modal.new_item_input.update(cx, |inp, cx| {
-                                                inp.set_value("", window, cx);
-                                            });
+                                        if modal.add_typed_item(window, cx) {
                                             cx.notify();
                                         }
                                     }
@@ -685,11 +698,7 @@ impl SettingsView {
                         .label(Text::new("항목 추가", "Add item").s())
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(modal) = this.list_editor() {
-                                let val = modal.new_item_input.read(cx).value().to_string();
-                                if modal.items.add(&val) {
-                                    modal.new_item_input.update(cx, |inp, cx| {
-                                        inp.set_value("", window, cx);
-                                    });
+                                if modal.add_typed_item(window, cx) {
                                     cx.notify();
                                 }
                             }
