@@ -54,11 +54,13 @@ fn category_icon(idx: usize) -> IconName {
     match idx {
         0 => IconName::Type,
         1 => IconName::Palette,
-        2 => IconName::MousePointer,
-        3 => IconName::Clipboard,
-        4 => IconName::AppWindow,
-        5 => IconName::Terminal,
-        6 => IconName::SlidersHorizontal,
+        2 => IconName::AppWindow,
+        3 => IconName::PanelsTopLeft,
+        4 => IconName::MousePointer,
+        5 => IconName::Keyboard,
+        6 => IconName::Clipboard,
+        7 => IconName::Terminal,
+        8 => IconName::Settings,
         _ => IconName::Zap,
     }
 }
