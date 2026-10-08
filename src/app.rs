@@ -3315,9 +3315,14 @@ impl Render for SettingsView {
             .pb_6()
             .child(list);
 
+        let thumb_bg = cx.theme().muted_foreground.opacity(0.45);
+        let thumb_hover = cx.theme().primary;
+        let track_bg = cx.theme().muted.opacity(0.25);
+
         let content = v_flex()
             .flex_1()
             .min_w_0()
+            .min_h_0()
             .h_full()
             .child(div().px_6().pt_5().pb_3().child(header))
             .child(
@@ -3333,7 +3338,14 @@ impl Render for SettingsView {
                             .child(
                                 Scrollbar::vertical(&self.scroll_handle)
                                     .mode(ScrollbarMode::Always)
-                                    .viewport_from_layout(),
+                                    .viewport_from_layout()
+                                    .styles(move |styles| {
+                                        styles
+                                            .track(move |t| t.bg(track_bg).width(px(8.)))
+                                            .thumb(move |t| t.bg(thumb_bg).width(px(8.)).radius(px(4.)))
+                                            .thumb_hover(move |t| t.bg(thumb_hover).width(px(8.)).radius(px(4.)))
+                                            .thumb_active(move |t| t.bg(thumb_hover).width(px(8.)).radius(px(4.)))
+                                    }),
                             ),
                     ),
             );
@@ -3446,13 +3458,20 @@ impl Render for SettingsView {
         };
         self.active_modal = modal;
 
-        let mut main_area = h_flex().items_stretch().flex_1().child(sidebar).child(content);
+        let mut main_area = h_flex()
+            .items_stretch()
+            .flex_1()
+            .min_h_0()
+            .child(sidebar)
+            .child(content);
         if self.show_preview {
             main_area = main_area.child(self.render_preview_panel(cx));
         }
 
         let mut root = v_flex()
             .size_full()
+            .min_h_0()
+            .overflow_hidden()
             .relative()
             .key_context("Settings")
             .on_action(cx.listener(Self::commit_save))
@@ -3462,7 +3481,6 @@ impl Render for SettingsView {
             .child(titlebar)
             .child(main_area)
             .child(status);
-
         if let Some(overlay) = modal_overlay {
             root = root.child(overlay);
         }
