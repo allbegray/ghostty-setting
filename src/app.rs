@@ -3306,8 +3306,9 @@ impl Render for SettingsView {
 
         let scroll_area = div()
             .id("option-scroll-area")
-            .flex_1()
-            .min_h_0()
+            .size_full()
+            .flex()
+            .flex_col()
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .px_6()
@@ -3328,10 +3329,7 @@ impl Render for SettingsView {
                     .child(
                         div()
                             .absolute()
-                            .top_0()
-                            .right(px(2.))
-                            .bottom(px(6.))
-                            .w(px(10.))
+                            .inset_0()
                             .child(
                                 Scrollbar::vertical(&self.scroll_handle)
                                     .mode(ScrollbarMode::Always)
