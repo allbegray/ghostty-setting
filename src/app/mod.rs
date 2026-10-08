@@ -748,7 +748,7 @@ impl Render for SettingsView {
         let titlebar = self.title_bar(dirty, cx);
         let sidebar = self.nav_sidebar(cx);
         let content = self.option_table(window, cx);
-        let status = self.status_bar(dirty, cx);
+        let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
 
         let modal = self.active_modal.take();
         let modal_overlay = match &modal {

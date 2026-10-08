@@ -7,6 +7,8 @@
 //! bar takes the dirty flag, the table takes the window because it builds rows,
 //! and the sidebar and status bar take nothing but the context.
 
+use gpui_kit::App;
+
 use super::*;
 
 impl SettingsView {
@@ -496,18 +498,19 @@ impl SettingsView {
 
         content.into_any_element()
     }
+}
 
-    pub(super) fn status_bar(&self, dirty: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+pub(super) fn status_bar(notice: Option<&str>, dirty: bool, cx: &App) -> gpui_kit::AnyElement {
         let status = StatusBar::new()
             .left(
-                if let Some(notice) = &self.notice {
+                if let Some(notice) = notice {
                     h_flex()
                         .gap_1p5()
                         .items_center()
                         .text_xs()
                         .text_color(cx.theme().foreground)
                         .child(Icon::new(IconName::RefreshCw).xsmall().text_color(cx.theme().primary))
-                        .child(notice.clone())
+                        .child(notice.to_string())
                 } else {
                     h_flex()
                         .gap_3()
@@ -577,7 +580,6 @@ impl SettingsView {
 
         status.into_any_element()
     }
-}
 
 fn row(
     this: &mut SettingsView,
