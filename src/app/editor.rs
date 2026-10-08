@@ -623,7 +623,7 @@ pub(super) fn value_editor(
                                 };
                                 this.active_modal = Some(ActiveModal::ListEditor {
                                     key,
-                                    items,
+                                    items: ListItems::from_values(items),
                                     recorded_trigger: String::new(),
                                     selected_action,
                                     action_select,

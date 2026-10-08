@@ -55,11 +55,13 @@ mod diff_modal;
 mod editor;
 mod editors;
 mod list_editor;
+mod list_items;
 mod preview;
 mod query;
 mod value;
 
 use editors::{EditorCache, Kept};
+use list_items::ListItems;
 
 use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
@@ -433,7 +435,7 @@ const POPULAR_FONTS: &[&str] = &[
 pub enum ActiveModal {
     ListEditor {
         key: &'static str,
-        items: Vec<String>,
+        items: ListItems,
         recorded_trigger: String,
         selected_action: String,
         action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
@@ -834,7 +836,7 @@ impl Render for SettingsView {
                 new_item_input,
             }) => Some(self.render_list_editor_modal(
                 key,
-                items,
+                items.as_slice(),
                 recorded_trigger,
                 selected_action,
                 action_select.as_ref(),

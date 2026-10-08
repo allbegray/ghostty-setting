@@ -198,10 +198,10 @@ impl SettingsView {
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
                                                     if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                        if ix < items.len() {
-                                                            items.remove(ix);
-                                                            cx.notify();
-                                                        }
+                                                        items.remove_at(ix);
+cx.notify();
+
+
                                                     }
                                                 });
                                             }),
@@ -233,10 +233,10 @@ impl SettingsView {
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
                                                     if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                        if ix < items.len() {
-                                                            items.remove(ix);
-                                                            cx.notify();
-                                                        }
+                                                        items.remove_at(ix);
+cx.notify();
+
+
                                                     }
                                                 });
                                             }),
@@ -365,7 +365,7 @@ impl SettingsView {
                                     if let Some(ActiveModal::ListEditor { recorded_trigger, items, selected_action, .. }) = &mut this.active_modal {
                                         if !recorded_trigger.is_empty() && !selected_action.trim().is_empty() {
                                             let entry = format!("{recorded_trigger}={}", selected_action.trim());
-                                            items.push(entry);
+                                            items.add(&entry);
                                             recorded_trigger.clear();
                                             cx.notify();
                                         }
@@ -453,7 +453,7 @@ impl SettingsView {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(ActiveModal::ListEditor { items, selected_font, .. }) = &mut this.active_modal {
                                         if !selected_font.trim().is_empty() {
-                                            items.push(selected_font.trim().to_string());
+                                            items.add_unique(selected_font);
                                             cx.notify();
                                         }
                                     }
@@ -486,8 +486,7 @@ impl SettingsView {
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                    if !items.iter().any(|f| f == font_name) {
-                                                        items.push(font_name.to_string());
+                                                    if items.add_unique(font_name) {
                                                         cx.notify();
                                                     }
                                                 }
@@ -521,7 +520,7 @@ impl SettingsView {
                                 this.update(cx, |this, cx| {
                                     if let Some(path) = result {
                                         if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                            items.push(path);
+                                            items.add(&path);
                                             cx.notify();
                                         }
                                     }
@@ -538,8 +537,7 @@ impl SettingsView {
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                 let val = new_item_input.read(cx).value().to_string();
-                                if !val.trim().is_empty() {
-                                    items.push(val.trim().to_string());
+                                if items.add(&val) {
                                     new_item_input.update(cx, |inp, cx| {
                                         inp.set_value("", window, cx);
                                     });
@@ -589,8 +587,7 @@ impl SettingsView {
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                         let val = new_item_input.read(cx).value().to_string();
-                                        if !val.trim().is_empty() {
-                                            items.push(val.trim().to_string());
+                                        if items.add(&val) {
                                             new_item_input.update(cx, |inp, cx| {
                                                 inp.set_value("", window, cx);
                                             });
@@ -626,8 +623,7 @@ impl SettingsView {
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                    if !items.iter().any(|f| f == feat) {
-                                                        items.push(feat.to_string());
+                                                    if items.add_unique(feat) {
                                                         cx.notify();
                                                     }
                                                 }
@@ -655,8 +651,7 @@ impl SettingsView {
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                 let val = new_item_input.read(cx).value().to_string();
-                                if !val.trim().is_empty() {
-                                    items.push(val.trim().to_string());
+                                if items.add(&val) {
                                     new_item_input.update(cx, |inp, cx| {
                                         inp.set_value("", window, cx);
                                     });
@@ -694,7 +689,7 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(ActiveModal::ListEditor { key, items, .. }) = &this.active_modal {
                             let k = *key;
-                            let items_clone = items.clone();
+                            let items_clone = items.as_slice().to_vec();
                             this.commit_all(k, &items_clone, cx);
                             this.active_modal = None;
                             this.notice = Some(
