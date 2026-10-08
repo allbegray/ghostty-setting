@@ -25,9 +25,12 @@ use gpui_kit::component::{
     select::{SelectEvent, SelectState},
     slider::{SliderEvent, SliderState},
 };
-use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Window};
+
 
 use super::SettingsView;
+use crate::config::schema::Opt;
+use crate::i18n::Text;
 use crate::app::commit::Reported;
 use crate::app::value;
 
@@ -105,7 +108,7 @@ impl EditorCache {
         &mut self,
         key: &'static str,
         seed: &str,
-        placeholder: &str,
+        placeholder: Text,
         window: &mut Window,
         cx: &mut Context<SettingsView>,
     ) -> Entity<InputState> {
@@ -114,7 +117,7 @@ impl EditorCache {
         }
         let editor = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(placeholder)
+                .placeholder(placeholder.s())
                 .default_value(seed.to_string())
         });
         let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
@@ -314,9 +317,25 @@ impl EditorCache {
         self.sliders.clear();
     }
 
-    /// Discard only the text fields, whose placeholders carry localized copy.
-    pub fn forget_inputs(&mut self) {
-        self.inputs.clear();
+    /// Re-resolve every retained field's placeholder in the active language.
+    ///
+    /// A field's placeholder is localized copy it took at construction, so a
+    /// language switch leaves it stale. Refreshing it in place keeps what the
+    /// user has typed — where dropping the fields would lose it.
+    pub fn refresh_placeholders(
+        &mut self,
+        placeholder: fn(&'static Opt) -> Text,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for (key, entry) in self.inputs.iter_mut() {
+            let Some(opt) = crate::config::schema::lookup(key) else {
+                continue;
+            };
+            entry.editor.update(cx, |state, cx| {
+                state.set_placeholder(placeholder(opt).s(), window, cx)
+            });
+        }
     }
 }
 

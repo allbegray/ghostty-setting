@@ -28,8 +28,6 @@ pub enum Reported {
         slot: Kept,
         value: String,
     },
-    /// The full set of a repeatable key's items.
-    List(Vec<String>),
     /// The option is being cleared back to its default.
     Cleared,
 }
@@ -83,7 +81,6 @@ pub fn decide(report: Reported) -> Decision {
     match report {
         Reported::Typed(value) => typed(&value),
         Reported::Chosen { slot, value } => chosen(slot, &value),
-        Reported::List(items) => list(&items),
         Reported::Cleared => cleared(),
     }
 }

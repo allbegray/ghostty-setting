@@ -71,6 +71,22 @@ use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
 use crate::config::{self};
 use crate::i18n::{self, Lang, Text};
 
+/// The search field's placeholder, in every language.
+///
+/// The field is rebuilt when the language switches, so the placeholder is
+/// read at construction; writing it once keeps the two constructions from
+/// drifting apart.
+const SEARCH_PLACEHOLDER: Text = Text::new("옵션 검색  ( / )", "Search options ( / )");
+
+/// The placeholder a field shows: the option's hint, or the generic one.
+fn opt_hint_text(opt: &'static Opt) -> Text {
+    if opt.hint.get(Lang::Ko).is_empty() && opt.hint.get(Lang::En).is_empty() {
+        Text::new("값 입력", "Enter value")
+    } else {
+        opt.hint
+    }
+}
+
 /// Icon for a sidebar destination, keyed by `Category::id`.
 ///
 /// Keying off identity rather than position is what makes reordering
@@ -441,7 +457,12 @@ pub struct SettingsView {
     /// Interface-language picker. Kept out of the cache because it must
     /// survive the editor reset that a language switch performs.
     lang_select: Entity<SelectState<SearchableVec<SharedString>>>,
-    _subscriptions: Vec<Subscription>,
+    /// The search field's write-back. One slot, replaced when a language
+    /// switch rebuilds the field, so the view does not accumulate a
+    /// subscription per switch.
+    search_subscription: Option<Subscription>,
+    /// The language picker's write-back, held so it lives as long as the view.
+    _lang_subscription: Subscription,
     active_modal: Option<ActiveModal>,
     show_preview: bool,
     scroll_handle: ScrollHandle,
@@ -449,7 +470,7 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, path: Option<PathBuf>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s()));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(SEARCH_PLACEHOLDER.s()));
         let subscription = cx.subscribe_in(&search_input, window, |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search = state.read(cx).value().to_string();
@@ -490,7 +511,8 @@ impl SettingsView {
             notice: None,
             editors: EditorCache::default(),
             lang_select,
-            _subscriptions: vec![subscription, lang_subscription],
+            search_subscription: Some(subscription),
+            _lang_subscription: lang_subscription,
             active_modal: None,
             show_preview: true,
             scroll_handle: ScrollHandle::default(),
@@ -508,10 +530,10 @@ impl SettingsView {
             return;
         }
         i18n::set(lang);
-        self.editors.forget_inputs();
+        self.editors.refresh_placeholders(opt_hint_text, window, cx);
         self.search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s())
+                .placeholder(SEARCH_PLACEHOLDER.s())
                 .default_value(self.search.clone())
         });
         let subscription =
@@ -521,7 +543,7 @@ impl SettingsView {
                     cx.notify();
                 }
             });
-        self._subscriptions.push(subscription);
+        self.search_subscription = Some(subscription);
         self.notice = None;
         cx.notify();
     }
@@ -651,13 +673,13 @@ impl SettingsView {
 
     fn get_or_create_input(
         &mut self,
-        key: &'static str,
-        hint: &'static str,
+        opt: &'static Opt,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
+        let key = opt.key;
         let seed = self.file.get(key).unwrap_or_default();
-        let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
+        let placeholder = opt_hint_text(opt);
         self.editors.input(key, &seed, placeholder, window, cx)
     }
 

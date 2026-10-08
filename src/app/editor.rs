@@ -231,7 +231,7 @@ pub(super) fn value_editor(
                         .into_any_element()
                 }
                 "working-directory" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
+                    let state = this.get_or_create_input(opt, window, cx);
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -284,7 +284,7 @@ pub(super) fn value_editor(
                         .into_any_element()
                 }
                 _ => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
+                    let state = this.get_or_create_input(opt, window, cx);
                     if let Some(chips) = controls::chips(key) {
                         return render_input_with_chips(&state, key, &current_val, chips, cx.entity(), cx);
                     }
