@@ -1,1 +1,9 @@
 /target
+
+# Local working artifacts: the i18n migration inputs and verification
+# screenshots are provenance for this checkout, not part of the project.
+/.i18n/
+/.idea/
+
+# Skill documents fetched from longbridge/gpui-kit; see skills-lock.json.
+/.agents/
