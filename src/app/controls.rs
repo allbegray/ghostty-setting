@@ -12,7 +12,9 @@
 //! Bilingual copy follows the rule the rest of the app follows: anything a
 //! user reads is a [`Text`], so a string cannot ship in one language only.
 
-use crate::config::schema::{Kind, Opt, lookup};
+use crate::config::schema::Opt;
+#[cfg(test)]
+use crate::config::schema::{Kind, lookup};
 use crate::i18n::Text;
 
 /// A set of quick values an option's input offers as chips.
@@ -66,7 +68,9 @@ pub(crate) const POPULAR_FONTS: &[&str] = &[
     "Cascadia Code",
 ];
 
-/// Every key with a slider. The one list the tests walk.
+/// Every key with a slider. The tests walk it, and [`slider`] asserts it
+/// stays complete — a key added here without a slider, or a slider key not
+/// listed, would be the silent-miss failure this module replaced.
 const SLIDER_KEYS: &[&str] = &[
     "font-size",
     "background-opacity",
@@ -171,6 +175,9 @@ pub(crate) const SIZE_FIELDS: &[(&str, NumberField)] = &[
 /// The key list is [`SLIDER_KEYS`], so a key with no entry falls through and a
 /// test walks every key on it.
 pub(crate) fn slider(key: &str) -> Option<Slider> {
+    if !SLIDER_KEYS.contains(&key) {
+        return None;
+    }
     Some(match key {
         "font-size" => Slider { default: 13.0, step: 1.0, unit: Some(Text::new("pt", "pt")) },
         "background-opacity" => Slider { default: 1.0, step: 0.05, unit: None },
@@ -219,6 +226,7 @@ pub(crate) fn edit_bounds(opt: &Opt) -> (f64, f64) {
 /// Derived from the tables themselves, never hand-written: a key added to one
 /// table is visited by the schema checks automatically, which is the whole
 /// point — the failure this module replaced was a key nobody checked.
+#[cfg(test)]
 pub(crate) fn policy_keys() -> impl Iterator<Item = &'static str> {
     UI_RANGES
         .iter()
@@ -232,6 +240,7 @@ pub(crate) fn policy_keys() -> impl Iterator<Item = &'static str> {
 /// The keys the option editor special-cases while opening a list modal, and
 /// the content lists they depend on. `keybind` and `font-feature` are list
 /// keys the modal shapes on; `font-family` seeds its font dropdown.
+#[cfg(test)]
 pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-feature", "config-file"];
 
 /// Whether `value` is a value the option accepts.
@@ -239,6 +248,7 @@ pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-fe
 /// A numeric kind accepts anything the parser reads inside its range, an enum
 /// accepts only its listed values; every other kind accepts anything, because
 /// its values are free text or a repeat it cannot pre-judge.
+#[cfg(test)]
 pub(crate) fn accepts(opt: &Opt, value: &str) -> bool {
     match opt.kind {
         Kind::Int { min, max } => match value.parse::<i64>() {
@@ -316,6 +326,16 @@ mod tests {
         }
     }
 
+    /// The key list and the lookup are one fact in two places: a key listed
+    /// without a slider, or a slider key missing from the list, is the
+    /// silent-miss failure this module replaced.
+    #[test]
+    fn every_slider_key_has_a_slider() {
+        for key in SLIDER_KEYS {
+            assert!(slider(key).is_some(), "'{key}' is listed but has no slider");
+        }
+    }
+
     /// A slider rests at its default and steps through a value the option
     /// accepts: a default outside the valid range would show a value the file
     /// cannot hold. Walked over every slider key, not a hand-written subset.
@@ -352,6 +372,31 @@ mod tests {
                 opt.kind
             );
         }
+    }
+
+    /// The bilingual rule: a label a user reads must answer in the language
+    /// they chose. A label that stops answering in one language is the bug
+    /// the move almost shipped, so every policy label is checked in both.
+    #[test]
+    fn every_policy_label_answers_in_both_languages() {
+        let restore = crate::i18n::current();
+        for &lang in crate::i18n::Lang::ALL {
+            crate::i18n::set(lang);
+            for key in policy_keys() {
+                for (label, _) in chips(key).into_iter().flatten() {
+                    assert!(!label.get(lang).is_empty(), "'{key}' has no {lang:?} label");
+                }
+            }
+            for (key, field) in SIZE_FIELDS {
+                if let Some(unit) = field.unit {
+                    assert!(
+                        !unit.get(lang).is_empty(),
+                        "'{key}' has no {lang:?} unit"
+                    );
+                }
+            }
+        }
+        crate::i18n::set(restore);
     }
 
     /// The modal's list keys are the keys its shapes name: a shape without an
