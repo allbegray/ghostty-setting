@@ -53,6 +53,7 @@ mod editor;
 mod editors;
 mod list_editor;
 mod preview;
+mod query;
 mod value;
 
 use editors::{EditorCache, Kept};
@@ -327,14 +328,7 @@ static SYSTEM_FONTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new
     for path in ["/Applications/Ghostty.app/Contents/MacOS/ghostty", "ghostty"] {
         if let Ok(output) = std::process::Command::new(path).arg("+list-fonts").output() {
             if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let mut fonts: Vec<String> = text
-                    .lines()
-                    .filter(|l| !l.starts_with(' ') && !l.starts_with('\t') && !l.trim().is_empty())
-                    .map(|l| l.trim().to_string())
-                    .collect();
-                fonts.sort();
-                fonts.dedup();
+                let fonts = parse_fonts(&String::from_utf8_lossy(&output.stdout));
                 if !fonts.is_empty() {
                     return fonts;
                 }
@@ -355,6 +349,41 @@ static SYSTEM_FONTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new
     ]
 });
 
+/// Font families from `ghostty +list-fonts`.
+///
+/// The command prints a name per line and indents stylistic variants beneath
+/// the family they belong to, so an indented line is not a family.
+fn parse_fonts(output: &str) -> Vec<String> {
+    let mut fonts: Vec<String> = output
+        .lines()
+        .filter(|line| !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .collect();
+    fonts.sort();
+    fonts.dedup();
+    fonts
+}
+
+/// Theme names from `ghostty +list-themes`.
+///
+/// Each line is `name (source)`, and the panel only wants the name.
+fn parse_themes(output: &str) -> Vec<String> {
+    let mut themes: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.split(" (").next().unwrap_or(trimmed).to_string())
+            }
+        })
+        .collect();
+    themes.sort();
+    themes.dedup();
+    themes
+}
+
 pub fn get_system_fonts() -> &'static [String] {
     &SYSTEM_FONTS
 }
@@ -363,20 +392,7 @@ static GHOSTTY_THEMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::n
     for path in ["/Applications/Ghostty.app/Contents/MacOS/ghostty", "ghostty"] {
         if let Ok(output) = std::process::Command::new(path).arg("+list-themes").output() {
             if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let mut themes: Vec<String> = text
-                    .lines()
-                    .filter_map(|l| {
-                        let trimmed = l.trim();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(trimmed.split(" (").next().unwrap_or(trimmed).to_string())
-                        }
-                    })
-                    .collect();
-                themes.sort();
-                themes.dedup();
+                let themes = parse_themes(&String::from_utf8_lossy(&output.stdout));
                 if !themes.is_empty() {
                     return themes;
                 }
@@ -527,7 +543,7 @@ impl SettingsView {
     }
 
     fn dirty(&self) -> bool {
-        self.file.render() != self.original
+        query::dirty(&self.file, &self.original)
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
@@ -589,11 +605,7 @@ impl SettingsView {
     }
 
     fn is_set(&self, opt: &Opt) -> bool {
-        if opt.repeatable() {
-            self.file.get_all(opt.key).iter().any(|v| !v.is_empty())
-        } else {
-            self.file.get(opt.key).is_some()
-        }
+        query::is_set(&self.file, opt)
     }
 
     /// The one path that changes an option's value.
@@ -634,34 +646,11 @@ impl SettingsView {
     }
 
     fn visible_opts(&self) -> Vec<&'static Opt> {
-        let q = self.search.trim().to_lowercase();
-        if q.is_empty() {
-            CATEGORIES[self.category]
-                .keys
-                .iter()
-                .filter_map(|k| lookup(k))
-                .collect()
-        } else {
-            crate::config::schema::OPTS
-                .iter()
-                .filter(|o| {
-                    // Search every language, so a Korean user who knows the
-                    // English term (or the reverse) still finds the option.
-                    o.key.contains(&q)
-                        || Lang::ALL.iter().any(|lang| {
-                            o.label.get(*lang).to_lowercase().contains(&q)
-                                || o.doc.get(*lang).to_lowercase().contains(&q)
-                        })
-                })
-                .collect()
-        }
+        query::visible(&self.search, self.category)
     }
 
     fn set_count(&self) -> usize {
-        self.visible_opts()
-            .iter()
-            .filter(|o| self.is_set(o))
-            .count()
+        query::set_count(&self.file, &self.search, self.category)
     }
 
     fn get_or_create_input(
@@ -1739,18 +1728,29 @@ mod tests {
         i18n::set(restore);
     }
 
+    /// The catalog parsers are the part that can be wrong about the command's
+    /// output, so they are checked against captured output rather than against
+    /// whatever the machine happens to answer. The previous versions of these
+    /// tests passed whether the subprocess ran, failed, or returned nonsense.
     #[test]
-    fn test_system_fonts_discovery() {
-        let fonts = get_system_fonts();
-        assert!(!fonts.is_empty());
-        assert!(fonts.iter().any(|f| f.contains("Mono") || f.contains("Courier") || f.contains("Menlo")));
+    fn fonts_are_read_from_the_command_output() {
+        let output = "JetBrains Mono\n  JetBrains Mono NL\nMenlo\nMenlo\n\nFira Code\n";
+        assert_eq!(parse_fonts(output), vec!["Fira Code", "JetBrains Mono", "Menlo"]);
+        assert!(parse_fonts("").is_empty());
     }
 
     #[test]
-    fn test_ghostty_themes_discovery() {
-        let themes = get_ghostty_themes();
-        assert!(!themes.is_empty());
-        assert!(themes.iter().any(|t| t.contains("catppuccin") || t.contains("nord") || t.contains("dracula") || t.contains("tokyo")));
+    fn themes_are_read_without_their_source() {
+        let output = "tokyo-night (built-in)\nnord (built-in)\n\ndracula (user)\n";
+        assert_eq!(parse_themes(output), vec!["dracula", "nord", "tokyo-night"]);
+        assert!(parse_themes("").is_empty());
+    }
+
+    /// Whichever path the catalog takes, the app needs something to offer.
+    #[test]
+    fn the_catalogs_are_never_empty() {
+        assert!(!get_system_fonts().is_empty());
+        assert!(!get_ghostty_themes().is_empty());
     }
 
 }
