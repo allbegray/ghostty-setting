@@ -5,7 +5,7 @@
 //! knows only the option, the view and the window.
 
 use super::*;
-use super::controls;
+use super::controls::{self, Slider as SliderPolicy};
 use super::list_editor::ListEditorModal;
 use super::list_items::ListItems;
 use crate::app::value::{self, Stored};
@@ -14,54 +14,42 @@ fn render_bounded_slider_number(
     this: &mut SettingsView,
     key: &'static str,
     val_str: &str,
-    default_val: f64,
     min: f64,
     max: f64,
-    step: f64,
-    is_float: bool,
-    unit: Option<&'static str>,
+    slider: &SliderPolicy,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
     let num_state = this.get_or_create_number_input(
         key,
-        &format!("{default_val}"),
+        &format!("{}", slider.default),
         min,
         max,
-        step,
+        slider.step,
         window,
         cx,
     );
 
     let mut num_input = NumberInput::new(&num_state).small();
-    if let Some(suf) = unit {
+    if let Some(unit) = slider.unit {
         num_input = num_input.suffix(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(suf),
+                .child(unit.s()),
         );
     }
 
-    let cur: f32 = val_str.parse().unwrap_or(default_val as f32);
-    let (slider_state, created) =
-        this.editors
-            .slider(key, cur, min as f32, max as f32, step as f32, cx);
-    if created {
-        cx.subscribe(&slider_state, move |this, _, event, cx| {
-            let (SliderEvent::Change(val) | SliderEvent::Release(val)) = event;
-            let new_val = if is_float {
-                format!("{:.2}", val.start())
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string()
-            } else {
-                format!("{}", val.start().round() as i64)
-            };
-            this.commit(key, Some(&new_val), Kept::Slider, cx);
-        })
-        .detach();
-    }
+    let cur: f32 = val_str.parse().unwrap_or(slider.default as f32);
+    let slider_state = this.editors.slider(
+        key,
+        cur,
+        min as f32,
+        max as f32,
+        slider.step as f32,
+        slider.decimal,
+        cx,
+    );
 
     h_flex()
         .gap_3()
@@ -203,17 +191,7 @@ pub(super) fn value_editor(
             let selected = Stored::new(current.as_deref())
                 .index_in(&items_vec)
                 .map(IndexPath::new);
-            let (state, created) =
-                this.editors
-                    .select(opt.key, items_vec, selected, window, cx);
-            if created {
-                let key = opt.key;
-                cx.subscribe(&state, move |this, _, event, cx| {
-                    let SelectEvent::Confirm(value) = event;
-                    this.commit(key, value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
-                })
-                .detach();
-            }
+            let state = this.editors.select(opt.key, items_vec, selected, window, cx);
             div()
                 .max_w(px(260.))
                 .child(Select::new(&state).small())
@@ -229,12 +207,9 @@ pub(super) fn value_editor(
                     this,
                     key,
                     &current_val,
-                    slider.default,
                     bound_min,
                     bound_max,
-                    slider.step,
-                    true,
-                    slider.unit.map(|u| u.s()),
+                    &slider,
                     window,
                     cx,
                 );
@@ -301,16 +276,7 @@ pub(super) fn value_editor(
                     let selected = Stored::new(current.as_deref())
                         .index_in(&items_vec)
                         .map(IndexPath::new);
-                    let (theme_select, created) =
-                        this.editors
-                            .select("theme", items_vec, selected, window, cx);
-                    if created {
-                        cx.subscribe(&theme_select, move |this, _, event, cx| {
-                            let SelectEvent::Confirm(value) = event;
-                            this.commit("theme", value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
-                        })
-                        .detach();
-                    }
+                    let theme_select = this.editors.select(key, items_vec, selected, window, cx);
                     div()
                         .max_w(px(260.))
                         .child(Select::new(&theme_select).small())
@@ -330,16 +296,7 @@ pub(super) fn value_editor(
         }
         Kind::Color { .. } => {
             let current = Stored::new(this.file.get(opt.key).as_deref()).color();
-            let (state, created) = this.editors.color(opt.key, current, window, cx);
-            if created {
-                let key = opt.key;
-                cx.subscribe(&state, move |this, _, event, cx| {
-                    if let ColorPickerEvent::Change(Some(color)) = event {
-                        this.commit(key, Some(&value::hex(*color)), Kept::Color, cx);
-                    }
-                })
-                .detach();
-            }
+            let state = this.editors.color(opt.key, current, window, cx);
             let current_text = this.file.get(opt.key).unwrap_or_default();
             h_flex()
                 .items_center()

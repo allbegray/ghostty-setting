@@ -35,6 +35,9 @@ pub(crate) struct Slider {
     pub(crate) step: f64,
     /// The unit suffix, when the value carries one.
     pub(crate) unit: Option<Text>,
+    /// Whether a change writes its fractional part: an opacity keeps `0.85`,
+    /// a cell width keeps whole numbers.
+    pub(crate) decimal: bool,
 }
 
 /// What a number field offers: the seed value, the step, and the unit.
@@ -179,11 +182,11 @@ pub(crate) fn slider(key: &str) -> Option<Slider> {
         return None;
     }
     Some(match key {
-        "font-size" => Slider { default: 13.0, step: 1.0, unit: Some(Text::new("pt", "pt")) },
-        "background-opacity" => Slider { default: 1.0, step: 0.05, unit: None },
-        "cursor-opacity" => Slider { default: 1.0, step: 0.05, unit: None },
-        "minimum-contrast" => Slider { default: 1.0, step: 0.5, unit: None },
-        "font-thicken-strength" => Slider { default: 0.0, step: 16.0, unit: None },
+        "font-size" => Slider { default: 13.0, step: 1.0, unit: Some(Text::new("pt", "pt")), decimal: true },
+        "background-opacity" => Slider { default: 1.0, step: 0.05, unit: None, decimal: true },
+        "cursor-opacity" => Slider { default: 1.0, step: 0.05, unit: None, decimal: true },
+        "minimum-contrast" => Slider { default: 1.0, step: 0.5, unit: None, decimal: true },
+        "font-thicken-strength" => Slider { default: 0.0, step: 16.0, unit: None, decimal: false },
         _ => return None,
     })
 }

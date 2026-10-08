@@ -25,7 +25,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, TitleBar,
     IndexPath,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPicker, ColorPickerEvent},
+    color_picker::ColorPicker,
     h_flex,
     hover_card::HoverCard,
     link::Link,
@@ -35,7 +35,7 @@ use gpui_kit::component::{
     select::{Select, SelectEvent, SelectState},
     searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
-    slider::{Slider, SliderEvent},
+    slider::Slider,
     status_bar::StatusBar,
     switch::Switch,
     tooltip::Tooltip,
@@ -652,18 +652,7 @@ impl SettingsView {
     ) -> Entity<InputState> {
         let seed = self.file.get(key).unwrap_or_default();
         let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
-        let (state, created) = self.editors.input(key, &seed, placeholder, window, cx);
-        if created {
-            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = state.read(cx).value().trim().to_string();
-                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
-                    this.commit(key, value, Kept::Input, cx);
-                }
-            });
-            self._subscriptions.push(sub);
-        }
-        state
+        self.editors.input(key, &seed, placeholder, window, cx)
     }
 
     fn get_or_create_number_input(
@@ -677,20 +666,8 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
-        let (state, created) = self
-            .editors
-            .number_input(key, &seed, min, max, step, window, cx);
-        if created {
-            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = state.read(cx).value().trim().to_string();
-                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
-                    this.commit(key, value, Kept::Input, cx);
-                }
-            });
-            self._subscriptions.push(sub);
-        }
-        state
+        self.editors
+            .number_input(key, &seed, min, max, step, window, cx)
     }
 }
 
