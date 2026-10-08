@@ -68,12 +68,144 @@ impl ListEditorModal {
         self.selected_action = action;
     }
 
+    /// Begin listening for the shortcut.
+    pub(crate) fn start_recording(&mut self, window: &mut Window, cx: &mut Context<SettingsView>) {
+        self.is_recording = true;
+        window.focus(&self.recorder_focus, cx);
+    }
+
+    /// Abandon a recording in progress.
+    pub(crate) fn cancel_recording(&mut self) {
+        self.is_recording = false;
+    }
+
+    /// Hand the recorder a key press, and report whether the modal changed.
+    ///
+    /// The whole rule: escape abandons the recording, a modifier on its own is
+    /// the user still reaching for the shortcut and is ignored, and anything
+    /// else becomes the trigger and ends the recording.
+    pub(crate) fn record_keystroke(&mut self, keystroke: &gpui_kit::Keystroke) -> bool {
+        if !self.is_recording {
+            return false;
+        }
+        let key = keystroke.key.as_str();
+        if key == "escape" {
+            self.is_recording = false;
+            return true;
+        }
+        if is_modifier_key_name(key) {
+            return false;
+        }
+        self.recorded_trigger = keystroke_to_ghostty_trigger(keystroke);
+        self.is_recording = false;
+        true
+    }
+
+    /// Re-resolve the typed input's placeholder in the active language.
+    ///
+    /// The placeholder is localized copy the field took at construction, so a
+    /// language switch needs it re-resolved — the same rule the retained row
+    /// fields follow.
+    pub(crate) fn refresh_placeholder(&self, window: &mut Window, cx: &mut App) {
+        self.new_item_input.update(cx, |input, cx| {
+            input.set_placeholder(NEW_ITEM_PLACEHOLDER.s(), window, cx);
+        });
+    }
+
     /// Record the font the dropdown confirmed.
     pub(crate) fn choose_font(&mut self, font: String) {
         self.selected_font = font;
     }
 }
 
+
+/// The placeholder the modal's typed input shows.
+const NEW_ITEM_PLACEHOLDER: Text = Text::new("새 항목 입력", "Enter new item");
+
+/// Whether a key press is a modifier on its own.
+///
+/// A recording session wants the modified key — pressing `super` alone is the
+/// user still reaching for the shortcut, not the shortcut.
+pub(super) fn is_modifier_key_name(key: &str) -> bool {
+    matches!(
+        key.to_lowercase().as_str(),
+        "ctrl"
+            | "control"
+            | "alt"
+            | "opt"
+            | "option"
+            | "shift"
+            | "cmd"
+            | "command"
+            | "super"
+            | "fn"
+            | "capslock"
+            | "caps_lock"
+    )
+}
+
+/// The Ghostty trigger a keystroke spells.
+///
+/// Modifiers are written in Ghostty's order and lowercase; a handful of keys
+/// are spelled differently from the platform's name, so they are mapped.
+pub(super) fn keystroke_to_ghostty_trigger(keystroke: &gpui_kit::Keystroke) -> String {
+    let mut parts = Vec::new();
+    if keystroke.modifiers.control {
+        parts.push("ctrl");
+    }
+    if keystroke.modifiers.alt {
+        parts.push("alt");
+    }
+    if keystroke.modifiers.shift {
+        parts.push("shift");
+    }
+    if keystroke.modifiers.platform {
+        parts.push("super");
+    }
+
+    let lower = keystroke.key.to_lowercase();
+    let key = match lower.as_str() {
+        "escape" | "esc" => "esc",
+        "return" | "enter" => "enter",
+        "tab" => "tab",
+        "space" => "space",
+        "backspace" => "backspace",
+        "up" | "arrowup" => "up",
+        "down" | "arrowdown" => "down",
+        "left" | "arrowleft" => "left",
+        "right" | "arrowright" => "right",
+        other => other,
+    };
+    parts.push(key);
+    parts.join("+")
+}
+
+/// How a Ghostty trigger reads on screen: `super+c` as `⌘C`.
+pub(super) fn ghostty_trigger_to_pretty(trigger: &str) -> String {
+    let parts: Vec<&str> = trigger.split('+').collect();
+    let mut out = String::new();
+    for &part in &parts {
+        match part.to_lowercase().as_str() {
+            "super" | "cmd" => out.push('⌘'),
+            "ctrl" | "control" => out.push('⌃'),
+            "alt" | "opt" | "option" => out.push('⌥'),
+            "shift" => out.push('⇧'),
+            "enter" | "return" => out.push_str("↵"),
+            "esc" | "escape" => out.push_str("⎋"),
+            "backspace" => out.push_str("⌫"),
+            "tab" => out.push_str("⇥"),
+            "space" => out.push_str("␣"),
+            "up" | "arrowup" => out.push('↑'),
+            "down" | "arrowdown" => out.push('↓'),
+            "left" | "arrowleft" => out.push('←'),
+            "right" | "arrowright" => out.push('→'),
+            other => {
+                out.push_str(&other.to_uppercase());
+            }
+        }
+    }
+    out
+}
 
 /// The keys the modal's shapes are written for.
 ///
@@ -404,25 +536,14 @@ impl SettingsView {
                                 })
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(modal) = this.list_editor() {
-                                        modal.is_recording = true;
-                                        window.focus(&modal.recorder_focus, cx);
+                                        modal.start_recording(window, cx);
                                         cx.notify();
                                     }
                                 }))
                                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                                     if let Some(modal) = this.list_editor() {
-                                        if modal.is_recording {
-                                            let key_name = &event.keystroke.key;
-                                            if key_name == "escape" {
-                                                modal.is_recording = false;
-                                                cx.notify();
-                                                return;
-                                            }
-                                            if !is_modifier_key_name(key_name) {
-                                                modal.recorded_trigger = keystroke_to_ghostty_trigger(&event.keystroke);
-                                                modal.is_recording = false;
-                                                cx.notify();
-                                            }
+                                        if modal.record_keystroke(&event.keystroke) {
+                                            cx.notify();
                                         }
                                     }
                                 }))
@@ -521,7 +642,7 @@ impl SettingsView {
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 if let Some(modal) = this.list_editor() {
-                                                    modal.selected_action = act_str.clone();
+                                                    modal.choose_action(act_str.clone());
                                                     cx.notify();
                                                 }
                                             });
@@ -846,5 +967,83 @@ mod tests {
                 "'{key}' opens the list modal but is not a repeatable key"
             );
         }
+    }
+    use gpui_kit::Keystroke;
+
+    /// A press, with the modifiers named.
+
+    /// A press, with the modifiers named.
+    fn keystroke(key: &str, modifiers: impl FnOnce(&mut Keystroke)) -> Keystroke {
+        let mut keystroke = Keystroke {
+            modifiers: Default::default(),
+            key: key.to_string(),
+            key_char: None,
+        };
+        modifiers(&mut keystroke);
+        keystroke
+    }
+
+    /// The modifier sets the tests build presses with.
+    fn mods(
+        control: bool,
+        alt: bool,
+        shift: bool,
+        platform: bool,
+    ) -> impl FnOnce(&mut Keystroke) {
+        move |k| {
+            k.modifiers.control = control;
+            k.modifiers.alt = alt;
+            k.modifiers.shift = shift;
+            k.modifiers.platform = platform;
+        }
+    }
+
+    fn none() -> impl FnOnce(&mut Keystroke) {
+        mods(false, false, false, false)
+    }
+
+    /// The trigger a press spells: modifiers in Ghostty's order, then the key,
+    /// all lowercase. `super+c` is what a config reads.
+    #[test]
+    fn a_press_spells_its_trigger() {
+        assert_eq!(
+            keystroke_to_ghostty_trigger(&keystroke("c", mods(false, false, false, true))),
+            "super+c"
+        );
+        assert_eq!(
+            keystroke_to_ghostty_trigger(&keystroke("K", mods(true, false, true, false))),
+            "ctrl+shift+k"
+        );
+    }
+
+    /// Keys the platform names differently are mapped to the name Ghostty's
+    /// config reads, so a recorded binding is never a name Ghostty rejects.
+    #[test]
+    fn platform_key_names_are_mapped() {
+        assert_eq!(keystroke_to_ghostty_trigger(&keystroke("return", none())), "enter");
+        assert_eq!(keystroke_to_ghostty_trigger(&keystroke("esc", none())), "esc");
+        assert_eq!(keystroke_to_ghostty_trigger(&keystroke("arrowup", none())), "up");
+    }
+
+    /// A modifier on its own is the user still reaching for the shortcut, so
+    /// it writes no trigger and leaves the recording running.
+    #[test]
+    fn a_modifier_alone_writes_no_trigger() {
+        for key in ["super", "ctrl", "shift", "alt", "cmd", "control", "opt", "fn"] {
+            assert!(
+                is_modifier_key_name(key),
+                "'{key}' is a modifier, not a key to record"
+            );
+        }
+        assert!(!is_modifier_key_name("c"));
+        assert!(!is_modifier_key_name("escape"));
+    }
+
+    /// How a trigger reads on screen: the glyphs a keyboard shows.
+    #[test]
+    fn a_trigger_reads_as_its_glyphs() {
+        assert_eq!(ghostty_trigger_to_pretty("super+c"), "⌘C");
+        assert_eq!(ghostty_trigger_to_pretty("super+shift+k"), "⌘⇧K");
+        assert_eq!(ghostty_trigger_to_pretty("ctrl+tab"), "⌃⇥");
     }
 }

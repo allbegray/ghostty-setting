@@ -6,6 +6,7 @@
 
 use super::*;
 use super::commit::Reported;
+use super::list_editor;
 use super::row_rules;
 use super::controls::{self, Slider as SliderPolicy};
 use gpui_kit::App;
@@ -429,7 +430,7 @@ pub(super) fn value_editor(
                             .gap_1p5()
                             .items_center()
                             .children(binding_shown.into_iter().map(|(trigger, action)| {
-                                let pretty = ghostty_trigger_to_pretty(trigger);
+                                let pretty = list_editor::ghostty_trigger_to_pretty(trigger);
                                 h_flex()
                                     .gap_1()
                                     .items_center()

@@ -51,6 +51,7 @@ use gpui_kit::{
 use gpui_kit::base::Disableable as _;
 
 mod chrome;
+mod chrome_sections;
 mod commit;
 mod controls;
 mod diff_modal;
@@ -221,82 +222,6 @@ fn compute_line_diff(old_text: &str, new_text: &str) -> Vec<DiffLine> {
     }
     diff.reverse();
     diff
-}
-
-fn is_modifier_key_name(key: &str) -> bool {
-    matches!(
-        key.to_lowercase().as_str(),
-        "ctrl"
-            | "control"
-            | "alt"
-            | "opt"
-            | "option"
-            | "shift"
-            | "cmd"
-            | "command"
-            | "super"
-            | "fn"
-            | "capslock"
-            | "caps_lock"
-    )
-}
-
-fn keystroke_to_ghostty_trigger(keystroke: &gpui_kit::Keystroke) -> String {
-    let mut parts = Vec::new();
-    if keystroke.modifiers.control {
-        parts.push("ctrl");
-    }
-    if keystroke.modifiers.alt {
-        parts.push("alt");
-    }
-    if keystroke.modifiers.shift {
-        parts.push("shift");
-    }
-    if keystroke.modifiers.platform {
-        parts.push("super");
-    }
-
-    let lower = keystroke.key.to_lowercase();
-    let key = match lower.as_str() {
-        "escape" | "esc" => "esc",
-        "return" | "enter" => "enter",
-        "tab" => "tab",
-        "space" => "space",
-        "backspace" => "backspace",
-        "up" | "arrowup" => "up",
-        "down" | "arrowdown" => "down",
-        "left" | "arrowleft" => "left",
-        "right" | "arrowright" => "right",
-        other => other,
-    };
-    parts.push(key);
-    parts.join("+")
-}
-
-fn ghostty_trigger_to_pretty(trigger: &str) -> String {
-    let parts: Vec<&str> = trigger.split('+').collect();
-    let mut out = String::new();
-    for &part in &parts {
-        match part.to_lowercase().as_str() {
-            "super" | "cmd" => out.push('⌘'),
-            "ctrl" | "control" => out.push('⌃'),
-            "alt" | "opt" | "option" => out.push('⌥'),
-            "shift" => out.push('⇧'),
-            "enter" | "return" => out.push_str("↵"),
-            "esc" | "escape" => out.push_str("⎋"),
-            "backspace" => out.push_str("⌫"),
-            "tab" => out.push_str("⇥"),
-            "space" => out.push_str("␣"),
-            "up" | "arrowup" => out.push('↑'),
-            "down" | "arrowdown" => out.push('↓'),
-            "left" | "arrowleft" => out.push('←'),
-            "right" | "arrowright" => out.push('→'),
-            other => {
-                out.push_str(&other.to_uppercase());
-            }
-        }
-    }
-    out
 }
 
 fn pick_folder() -> Option<String> {
@@ -535,6 +460,9 @@ impl SettingsView {
         }
         i18n::set(lang);
         self.editors.refresh_placeholders(opt_hint_text, window, cx);
+        if let Some(modal) = self.list_editor() {
+            modal.refresh_placeholder(window, cx);
+        }
         self.search_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(SEARCH_PLACEHOLDER.s())
@@ -764,8 +692,8 @@ impl Render for SettingsView {
                 cx.notify();
             }),
         };
-        let titlebar = chrome::title_bar(
-            &chrome::TitleBarInput {
+        let titlebar = chrome_sections::title_bar(
+            &chrome_sections::TitleBarInput {
                 path: &self.path,
                 dirty,
                 preview_open: self.show_preview,
@@ -774,9 +702,9 @@ impl Render for SettingsView {
             &actions,
             cx,
         );
-        let nav_items: Vec<chrome::NavItem> = CATEGORIES
+        let nav_items: Vec<chrome_sections::NavItem> = CATEGORIES
             .iter()
-            .map(|cat| chrome::NavItem {
+            .map(|cat| chrome_sections::NavItem {
                 label: cat.label.s().into(),
                 icon: category_icon(cat.id),
                 set_count: cat
@@ -792,8 +720,8 @@ impl Render for SettingsView {
                 cx.notify();
             },
         ));
-        let sidebar = chrome::nav_sidebar(
-            &chrome::NavSidebarInput {
+        let sidebar = chrome_sections::nav_sidebar(
+            &chrome_sections::NavSidebarInput {
                 items: &nav_items,
                 active: self.category,
                 searching: self.search.is_empty(),
@@ -803,7 +731,7 @@ impl Render for SettingsView {
             cx,
         );
         let content = self.option_table(window, cx);
-        let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
+        let status = chrome_sections::status_bar(self.notice.as_deref(), dirty, cx);
 
         let modal_overlay = match &self.active_modal {
             Some(ActiveModal::ListEditor(modal)) => Some(self.render_list_editor_modal(modal, cx)),
@@ -845,13 +773,6 @@ impl Render for SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_ghostty_trigger_formatting() {
-        assert_eq!(ghostty_trigger_to_pretty("super+c"), "⌘C");
-        assert_eq!(ghostty_trigger_to_pretty("super+shift+k"), "⌘⇧K");
-        assert_eq!(ghostty_trigger_to_pretty("ctrl+tab"), "⌃⇥");
-    }
 
     #[test]
     fn test_compute_line_diff() {
