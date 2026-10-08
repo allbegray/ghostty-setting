@@ -322,7 +322,7 @@ static SYSTEM_FONTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new
         }
     }
     vec![
-        "JetBrains Mono".into(),
+        controls::DEFAULT_FONT.to_string(),
         "SF Mono".into(),
         "Menlo".into(),
         "Monaco".into(),

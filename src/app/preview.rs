@@ -9,8 +9,20 @@
 use super::*;
 
 /// What the preview draws for a file with nothing set.
-const DEFAULT_FONT: &str = "JetBrains Mono";
-const DEFAULT_FONT_SIZE: f32 = 13.5;
+///
+/// The font family and size read their defaults from the control policy, so
+/// the preview and the editor's fallbacks cannot drift apart. This is also
+/// where the two font-size writers used to be: the preview rested at 13.5
+/// while the editor's slider rested at 13.0.
+fn default_font_size() -> f32 {
+    controls::slider("font-size")
+        .expect("font-size has a slider")
+        .default as f32
+}
+
+fn default_font() -> String {
+    controls::DEFAULT_FONT.to_string()
+}
 const DEFAULT_THEME: &str = "tokyo-night";
 const DEFAULT_CURSOR_STYLE: &str = "block";
 const DEFAULT_BG: &str = "#1a1b26";
@@ -45,11 +57,11 @@ impl PreviewModel {
     /// Every other key falls back to the value the preview shows for an
     /// unconfigured file, and opacity is clamped to what a window can draw.
     pub fn from(file: &LineFile) -> Self {
-        let font_family = file.get("font-family").unwrap_or_else(|| DEFAULT_FONT.to_string());
+        let font_family = file.get("font-family").unwrap_or_else(default_font);
         let font_size = file
             .get("font-size")
             .and_then(|size| size.parse().ok())
-            .unwrap_or(DEFAULT_FONT_SIZE);
+            .unwrap_or_else(default_font_size);
         let theme_name = file.get("theme").unwrap_or_else(|| DEFAULT_THEME.to_string());
         let cursor_style = file
             .get("cursor-style")
@@ -534,8 +546,8 @@ mod tests {
     #[test]
     fn an_empty_file_gets_the_defaults() {
         let model = PreviewModel::from(&file(&[]));
-        assert_eq!(model.font_family, DEFAULT_FONT);
-        assert_eq!(model.font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(model.font_family, default_font());
+        assert_eq!(model.font_size, default_font_size());
         assert_eq!(model.theme_name, DEFAULT_THEME);
         assert_eq!(model.cursor_style, DEFAULT_CURSOR_STYLE);
         assert_eq!(model.background_hex, DEFAULT_BG);

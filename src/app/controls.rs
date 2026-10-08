@@ -102,6 +102,25 @@ pub(crate) const CHIP_SETS: &[(&str, ChipSet)] = &[
     ]}),
 ];
 
+/// The default font family, written once.
+///
+/// The preview's fallback and the editor's fallback both read this; they used
+/// to each write the name, and a change to one left the other behind.
+pub(crate) const DEFAULT_FONT: &str = "JetBrains Mono";
+
+/// The popular coding fonts the font list editor offers as quick adds.
+///
+/// They are a content list, not control policy, but they live beside the
+/// default they start from.
+pub(crate) const POPULAR_FONTS: &[&str] = &[
+    "JetBrains Mono",
+    "SF Mono",
+    "Menlo",
+    "Monaco",
+    "Fira Code",
+    "Cascadia Code",
+];
+
 /// The window-size chip pairs, keyed by option key. They accompany a number
 /// field rather than replacing one, so they are read beside it.
 pub(crate) const SIZE_CHIPS: &[(&str, &[(&str, &str)])] = &[

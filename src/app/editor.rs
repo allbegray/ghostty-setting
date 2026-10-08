@@ -516,7 +516,7 @@ pub(super) fn value_editor(
                                     None
                                 };
                                 let selected_font = if key == "font-family" {
-                                    get_system_fonts().first().cloned().unwrap_or_else(|| "JetBrains Mono".into())
+                                    get_system_fonts().first().cloned().unwrap_or_else(|| controls::DEFAULT_FONT.to_string())
                                 } else {
                                     String::new()
                                 };
