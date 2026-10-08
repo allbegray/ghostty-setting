@@ -1,6 +1,6 @@
 //! Settings workspace: sidebar navigation beside the option detail view.
 //!
-//! Task: find one option among ~68, change its value, save. The composition
+//! Task: find one option among every documented one, change its value, save. The composition
 //! follows the kit guides — semantic components (`Sidebar`, `Button`,
 //! `Input`, `StatusBar`, `Badge`, `Label`), theme tokens only, rem-based
 //! geometry, one scroll owner (the option list). Config semantics still live
@@ -16,6 +16,7 @@
 //! - 4-lane aligned layout (option, value, state, reset action).
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -24,7 +25,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, TitleBar,
     IndexPath,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPicker, ColorPickerEvent},
+    color_picker::ColorPicker,
     h_flex,
     hover_card::HoverCard,
     link::Link,
@@ -34,7 +35,7 @@ use gpui_kit::component::{
     select::{Select, SelectEvent, SelectState},
     searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
-    slider::{Slider, SliderEvent},
+    slider::Slider,
     status_bar::StatusBar,
     switch::Switch,
     tooltip::Tooltip,
@@ -42,7 +43,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Anchor, AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    Anchor, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
     InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions,
     div, px,
@@ -50,19 +51,45 @@ use gpui_kit::{
 use gpui_kit::base::Disableable as _;
 
 mod chrome;
+mod commit;
+mod controls;
+mod diff_modal;
 mod editor;
 mod editors;
 mod list_editor;
+mod list_items;
 mod preview;
+mod row_rules;
 mod query;
 mod value;
 
+use commit::{Decision, Reported};
 use editors::{EditorCache, Kept};
 
 use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
 use crate::config::{self};
 use crate::i18n::{self, Lang, Text};
+
+/// The search field's placeholder, in every language.
+///
+/// The field is rebuilt when the language switches, so the placeholder is
+/// read at construction; writing it once keeps the two constructions from
+/// drifting apart.
+const SEARCH_PLACEHOLDER: Text = Text::new("옵션 검색  ( / )", "Search options ( / )");
+
+/// The placeholder a field shows: the option's hint, or the generic one.
+///
+/// An option with no hint in *any* language takes the generic one, so the
+/// fallback does not depend on which language happens to be active.
+fn opt_hint_text(opt: &'static Opt) -> Text {
+    let hintless = Lang::ALL.iter().all(|lang| opt.hint.get(*lang).is_empty());
+    if hintless {
+        Text::new("값 입력", "Enter value")
+    } else {
+        opt.hint
+    }
+}
 
 /// Icon for a sidebar destination, keyed by `Category::id`.
 ///
@@ -83,25 +110,6 @@ fn category_icon(id: &str) -> IconName {
     }
 }
 
-/// Editing ranges the UI narrows below the range Ghostty accepts.
-///
-/// The schema owns what is valid; a control may offer less so the useful part
-/// is reachable. Every entry must stay inside `Kind::bounds()` —
-/// `ui_ranges_stay_inside_schema_bounds` enforces that.
-const UI_RANGES: &[(&str, f64, f64)] = &[
-    ("font-size", 8.0, 72.0),
-    ("window-width", 20.0, 500.0),
-    ("window-height", 10.0, 200.0),
-];
-
-/// The range a numeric control offers: the narrowed UI range when one is
-/// declared, otherwise the schema's valid range.
-fn edit_bounds(opt: &Opt) -> (f64, f64) {
-    if let Some((_, min, max)) = UI_RANGES.iter().find(|(key, _, _)| *key == opt.key) {
-        return (*min, *max);
-    }
-    opt.kind.bounds().unwrap_or((0.0, 100.0))
-}
 actions!(settings, [Save, FocusSearch]);
 pub const GHOSTTY_ACTIONS: &[(&str, Text)] = &[
     ("copy_to_clipboard", Text::new("클립보드에 복사", "Copy to clipboard")),
@@ -337,7 +345,7 @@ static SYSTEM_FONTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new
         }
     }
     vec![
-        "JetBrains Mono".into(),
+        controls::DEFAULT_FONT.to_string(),
         "SF Mono".into(),
         "Menlo".into(),
         "Monaco".into(),
@@ -419,29 +427,24 @@ static GHOSTTY_THEMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::n
 pub fn get_ghostty_themes() -> &'static [String] {
     &GHOSTTY_THEMES
 }
-const POPULAR_FONTS: &[&str] = &[
-    "JetBrains Mono",
-    "SF Mono",
-    "Menlo",
-    "Monaco",
-    "Fira Code",
-    "Cascadia Code",
-];
 
 pub enum ActiveModal {
-    ListEditor {
-        key: &'static str,
-        items: Vec<String>,
-        recorded_trigger: String,
-        selected_action: String,
-        action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-        font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-        selected_font: String,
-        is_recording: bool,
-        recorder_focus: FocusHandle,
-        new_item_input: Entity<InputState>,
-    },
+    /// The list editor owns its own state (see `list_editor::ListEditorModal`).
+    ListEditor(list_editor::ListEditorModal),
     DiffViewer,
+}
+
+impl SettingsView {
+    /// The list editor, when it is the open modal.
+    ///
+    /// Every handler that changes the modal's state goes through here, so the
+    /// reach-in pattern has one shape and one place to change.
+    fn list_editor(&mut self) -> Option<&mut list_editor::ListEditorModal> {
+        match &mut self.active_modal {
+            Some(ActiveModal::ListEditor(modal)) => Some(modal),
+            _ => None,
+        }
+    }
 }
 
 pub struct SettingsView {
@@ -458,7 +461,12 @@ pub struct SettingsView {
     /// Interface-language picker. Kept out of the cache because it must
     /// survive the editor reset that a language switch performs.
     lang_select: Entity<SelectState<SearchableVec<SharedString>>>,
-    _subscriptions: Vec<Subscription>,
+    /// The search field's write-back. One slot, replaced when a language
+    /// switch rebuilds the field, so the view does not accumulate a
+    /// subscription per switch.
+    search_subscription: Option<Subscription>,
+    /// The language picker's write-back, held so it lives as long as the view.
+    _lang_subscription: Subscription,
     active_modal: Option<ActiveModal>,
     show_preview: bool,
     scroll_handle: ScrollHandle,
@@ -466,7 +474,7 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, path: Option<PathBuf>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s()));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(SEARCH_PLACEHOLDER.s()));
         let subscription = cx.subscribe_in(&search_input, window, |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search = state.read(cx).value().to_string();
@@ -507,7 +515,8 @@ impl SettingsView {
             notice: None,
             editors: EditorCache::default(),
             lang_select,
-            _subscriptions: vec![subscription, lang_subscription],
+            search_subscription: Some(subscription),
+            _lang_subscription: lang_subscription,
             active_modal: None,
             show_preview: true,
             scroll_handle: ScrollHandle::default(),
@@ -516,19 +525,19 @@ impl SettingsView {
 
     /// Switch the interface language.
     ///
-    /// Copy resolved while rendering follows on its own; widgets that captured
-    /// a localized placeholder when they were created do not. Those are
-    /// dropped here and rebuilt from the file on the next frame, which loses
-    /// no edits: every keystroke is already written through to the file.
+    /// Copy resolved while rendering follows on its own; a placeholder a
+    /// widget captured at construction does not. The retained fields have
+    /// their placeholders re-resolved in place — which is what keeps what the
+    /// user has typed, where dropping the fields would lose it.
     fn apply_language(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
         if i18n::current() == lang {
             return;
         }
         i18n::set(lang);
-        self.editors.forget_inputs();
+        self.editors.refresh_placeholders(opt_hint_text, window, cx);
         self.search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s())
+                .placeholder(SEARCH_PLACEHOLDER.s())
                 .default_value(self.search.clone())
         });
         let subscription =
@@ -538,7 +547,7 @@ impl SettingsView {
                     cx.notify();
                 }
             });
-        self._subscriptions.push(subscription);
+        self.search_subscription = Some(subscription);
         self.notice = None;
         cx.notify();
     }
@@ -585,6 +594,15 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// The one path that opens the diff viewer.
+    ///
+    /// Reviewing changes is a view-level action: which modal is open is view
+    /// state, and this is the door a section has to it.
+    fn review_changes(&mut self, cx: &mut Context<Self>) {
+        self.active_modal = Some(ActiveModal::DiffViewer);
+        cx.notify();
+    }
+
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -611,28 +629,32 @@ impl SettingsView {
 
     /// The one path that changes an option's value.
     ///
-    /// `value` is the new value, or `None` to clear the key. `kept` names the
-    /// editor that produced the change, so the cache can leave it standing
-    /// while the editors that would show a stale value are dropped. No call
-    /// site has to know which of the four caches holds its key.
-    fn commit(
+    /// A control reports what happened; the [`commit`] module says which file
+    /// edit follows and which slot drew it, so no call site spells the
+    /// empty-means-removes rule. A stateless control still says its own
+    /// `Kept::Nothing`, because that fact is its own. No call site has to know
+    /// which of the four caches holds its key.
+    fn commit(&mut self, key: &'static str, report: Reported, cx: &mut Context<Self>) {
+        let decision = commit::decide(report);
+        decision.edit.apply(key, &mut self.file);
+        self.settle(key, decision.kept, cx);
+    }
+
+    /// Commit a decision the caller already holds, for the controls that are
+    /// stateless or speak in whole lists.
+    fn commit_decision(
         &mut self,
         key: &'static str,
-        value: Option<&str>,
-        kept: Kept,
+        decision: Decision,
         cx: &mut Context<Self>,
     ) {
-        match value {
-            Some(value) => self.file.set(key, value),
-            None => self.file.remove(key),
-        }
-        self.settle(key, kept, cx);
+        decision.edit.apply(key, &mut self.file);
+        self.settle(key, decision.kept, cx);
     }
 
     /// Replace every value of a repeatable option.
     fn commit_all(&mut self, key: &'static str, values: &[String], cx: &mut Context<Self>) {
-        self.file.set_all(key, values);
-        self.settle(key, Kept::Nothing, cx);
+        self.commit_decision(key, commit::list(values), cx);
     }
 
     /// Drop the editors that would show a stale value, then re-render.
@@ -643,7 +665,7 @@ impl SettingsView {
     }
 
     fn reset_key(&mut self, key: &'static str, cx: &mut Context<Self>) {
-        self.commit(key, None, Kept::Nothing, cx);
+        self.commit_decision(key, commit::cleared(), cx);
     }
 
     fn visible_opts(&self) -> Vec<&'static Opt> {
@@ -656,25 +678,14 @@ impl SettingsView {
 
     fn get_or_create_input(
         &mut self,
-        key: &'static str,
-        hint: &'static str,
+        opt: &'static Opt,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
+        let key = opt.key;
         let seed = self.file.get(key).unwrap_or_default();
-        let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
-        let (state, created) = self.editors.input(key, &seed, placeholder, window, cx);
-        if created {
-            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = state.read(cx).value().trim().to_string();
-                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
-                    this.commit(key, value, Kept::Input, cx);
-                }
-            });
-            self._subscriptions.push(sub);
-        }
-        state
+        let placeholder = opt_hint_text(opt);
+        self.editors.input(key, &seed, placeholder, window, cx)
     }
 
     fn get_or_create_number_input(
@@ -688,155 +699,10 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
-        let (state, created) = self
-            .editors
-            .number_input(key, &seed, min, max, step, window, cx);
-        if created {
-            let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = state.read(cx).value().trim().to_string();
-                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
-                    this.commit(key, value, Kept::Input, cx);
-                }
-            });
-            self._subscriptions.push(sub);
-        }
-        state
+        self.editors
+            .number_input(key, &seed, min, max, step, window, cx)
     }
-
-
-    fn render_diff_modal(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let diff = compute_line_diff(&self.original, &self.file.render());
-
-        let diff_body = div()
-            .max_h(px(380.))
-            .overflow_y_scrollbar()
-            .p_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted.opacity(0.15))
-            .child(
-                v_flex()
-                    .gap_0p5()
-                    .children(diff.into_iter().enumerate().map(|(ix, line)| {
-                        match line {
-                            DiffLine::Same(text) => div()
-                                .id(format!("diff-same-{ix}"))
-                                .px_2()
-                                .py(px(1.))
-                                .font_family("Menlo")
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("  {text}")),
-                            DiffLine::Added(text) => div()
-                                .id(format!("diff-add-{ix}"))
-                                .px_2()
-                                .py(px(1.))
-                                .rounded_sm()
-                                .bg(cx.theme().success.opacity(0.15))
-                                .text_color(cx.theme().success)
-                                .font_family("Menlo")
-                                .font_semibold()
-                                .text_xs()
-                                .child(format!("+ {text}")),
-                            DiffLine::Removed(text) => div()
-                                .id(format!("diff-rem-{ix}"))
-                                .px_2()
-                                .py(px(1.))
-                                .rounded_sm()
-                                .bg(cx.theme().warning.opacity(0.15))
-                                .text_color(cx.theme().warning)
-                                .font_family("Menlo")
-                                .font_semibold()
-                                .text_xs()
-                                .child(format!("- {text}")),
-                        }
-                    }))
-            );
-
-        div()
-            .absolute()
-            .inset_0()
-            .bg(cx.theme().background.opacity(0.8))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                v_flex()
-                    .w(px(680.))
-                    .max_h(px(580.))
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .p_4()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .pb_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(Icon::new(IconName::FileText).small().text_color(cx.theme().primary))
-                                    .child(div().text_base().font_semibold().child(Text::new("변경 사항 미리보기 (Diff)", "Preview changes (Diff)").s())),
-                            )
-                            .child(
-                                Button::new("close-diff")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::X)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.active_modal = None;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .child(diff_body)
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .justify_end()
-                            .gap_2()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                Button::new("cancel-diff-btn")
-                                    .ghost()
-                                    .small()
-                                    .label(Text::new("닫기", "Close").s())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.active_modal = None;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("save-diff-btn")
-                                    .primary()
-                                    .small()
-                                    .icon(IconName::Check)
-                                    .label(Text::new("이대로 저장", "Save as is").s())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save(cx);
-                                        this.active_modal = None;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-            )
-            .into_any_element()
-    }
-
 }
-
-/// Parse `#rgb` / `#rrggbb` / X11 hex strings accepted by Ghostty into Hsla,
-/// so the color picker can be seeded with the file's current value.
 
 /// Where Ghostty documents one option. The reference page anchors every option
 /// by its own configuration key.
@@ -870,183 +736,80 @@ fn doc_card(doc: &'static str, key: &'static str) -> impl IntoElement {
         )
 }
 
-fn row(
-    this: &mut SettingsView,
-    opt: &'static Opt,
-    is_last: bool,
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-) -> gpui_kit::AnyElement {
-    let set = this.is_set(opt);
-    let key = opt.key;
-    let doc = opt.doc.s();
-    let opt_id = format!("opt-{key}");
 
-    let mut row = h_flex()
-        .id(key)
-        .items_center()
-        .gap_4()
-        .px_4()
-        .py(px(10.))
-        .hover(|s| s.bg(cx.theme().muted.opacity(0.35)));
-
-    if !is_last {
-        row = row.border_b_1().border_color(cx.theme().border.opacity(0.6));
-    }
-
-    let action_lane = if set {
-        let key2 = opt.key;
-        let view = cx.entity();
-        div()
-            .w(px(36.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                Button::new(format!("reset-{key2}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::RotateCcw)
-                    .tooltip(Text::new("기본값으로 되돌리기", "Reset to default").s())
-                    .on_click(move |_, _, cx| {
-                        view.update(cx, |this, cx| this.reset_key(key2, cx));
-                    }),
-            )
-    } else {
-        div().w(px(36.)).flex_none()
-    };
-
-    row.child(
-        HoverCard::new(format!("opt-doc-{key}"))
-            .anchor(Anchor::TopLeft)
-            .open_delay(Duration::from_millis(400))
-            .trigger(
-                v_flex()
-                    .id(opt_id)
-                    .w(px(240.))
-                    .flex_none()
-                    .gap_0()
-                    .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_medium()
-                                    .text_color(cx.theme().foreground)
-                                    .child(opt.label.s()),
-                            )
-                            .children(if !opt.platform.is_empty() {
-                                Some(
-                                    div()
-                                        .text_xs()
-                                        .px_1p5()
-                                        .py(px(1.))
-                                        .rounded_md()
-                                        .bg(cx.theme().muted)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .text_color(cx.theme().muted_foreground)
-                                        .font_family("Menlo")
-                                        .child(opt.platform),
-                                )
-                            } else {
-                                None
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family("Menlo")
-                            .text_color(cx.theme().muted_foreground)
-                            .child(key),
-                    ),
-            )
-            .content(move |_, _, _| doc_card(doc, key)),
-    )
-    .child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .child(editor::value_editor(this, opt, window, cx)),
-    )
-    .child(
-        div()
-            .w(px(80.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(if set {
-                div()
-                    .px_2()
-                    .py(px(2.))
-                    .rounded_full()
-                    .bg(cx.theme().primary.opacity(0.12))
-                    .text_color(cx.theme().primary)
-                    .text_xs()
-                    .font_medium()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(div().size(px(5.)).rounded_full().bg(cx.theme().primary))
-                    .child(Text::new("설정됨", "Set").s())
-                    .into_any_element()
-            } else {
-                div()
-                    .px_2()
-                    .py(px(2.))
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(Text::new("기본값", "Default").s())
-                    .into_any_element()
-            }),
-    )
-    .child(action_lane)
-    .into_any_element()
+/// A title-bar action: the view, doing one thing.
+///
+/// The render body is the only place holding the view's own handle, so it is
+/// the only place that can build these. A section receives the closure and
+/// nothing else.
+fn view_action(
+    view: &Entity<SettingsView>,
+    action: impl Fn(&mut SettingsView, &mut Context<SettingsView>) + 'static,
+) -> Rc<dyn Fn(&mut Window, &mut App)> {
+    let view = view.clone();
+    Rc::new(move |_: &mut Window, cx: &mut App| view.update(cx, |this, cx| action(this, cx)))
 }
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty();
-        let titlebar = self.title_bar(dirty, cx);
-        let sidebar = self.nav_sidebar(cx);
+        let view = cx.entity();
+        let actions = chrome::TitleBarActions {
+            reload: view_action(&view, |this, cx| this.revert(cx)),
+            discard: view_action(&view, |this, cx| this.revert(cx)),
+            save: view_action(&view, |this, cx| this.save(cx)),
+            review_changes: view_action(&view, |this, cx| this.review_changes(cx)),
+            toggle_preview: view_action(&view, |this, cx| {
+                this.show_preview = !this.show_preview;
+                cx.notify();
+            }),
+        };
+        let titlebar = chrome::title_bar(
+            &chrome::TitleBarInput {
+                path: &self.path,
+                dirty,
+                preview_open: self.show_preview,
+                lang_select: &self.lang_select,
+            },
+            &actions,
+            cx,
+        );
+        let nav_items: Vec<chrome::NavItem> = CATEGORIES
+            .iter()
+            .map(|cat| chrome::NavItem {
+                label: cat.label.s().into(),
+                icon: category_icon(cat.id),
+                set_count: cat
+                    .keys
+                    .iter()
+                    .filter(|k| lookup(k).is_some_and(|o| self.is_set(o)))
+                    .count(),
+            })
+            .collect();
+        let on_pick_category: Rc<dyn Fn(&usize, &mut Window, &mut App)> = Rc::new(cx.listener(
+            |this: &mut SettingsView, ix: &usize, _: &mut Window, cx: &mut Context<SettingsView>| {
+                this.category = *ix;
+                cx.notify();
+            },
+        ));
+        let sidebar = chrome::nav_sidebar(
+            &chrome::NavSidebarInput {
+                items: &nav_items,
+                active: self.category,
+                searching: self.search.is_empty(),
+                search_input: &self.search_input,
+            },
+            on_pick_category,
+            cx,
+        );
         let content = self.option_table(window, cx);
-        let status = self.status_bar(dirty, cx);
+        let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
 
-        let modal = self.active_modal.take();
-        let modal_overlay = match &modal {
-            Some(ActiveModal::ListEditor {
-                key,
-                items,
-                recorded_trigger,
-                selected_action,
-                action_select,
-                font_select,
-                selected_font,
-                is_recording,
-                recorder_focus,
-                new_item_input,
-            }) => Some(self.render_list_editor_modal(
-                key,
-                items,
-                recorded_trigger,
-                selected_action,
-                action_select.as_ref(),
-                font_select.as_ref(),
-                selected_font.as_str(),
-                *is_recording,
-                recorder_focus,
-                new_item_input,
-                cx,
-            )),
+        let modal_overlay = match &self.active_modal {
+            Some(ActiveModal::ListEditor(modal)) => Some(self.render_list_editor_modal(modal, cx)),
             Some(ActiveModal::DiffViewer) => Some(self.render_diff_modal(cx)),
             None => None,
         };
-        self.active_modal = modal;
 
         let mut main_area = h_flex()
             .items_stretch()
@@ -1120,24 +883,6 @@ mod tests {
         i18n::set(restore);
     }
 
-    /// The UI may offer less than Ghostty accepts, but never more: a narrowed
-    /// range that escapes the valid range would let a control write a value
-    /// the config rejects.
-    #[test]
-    fn ui_ranges_stay_inside_schema_bounds() {
-        for (key, min, max) in UI_RANGES {
-            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
-            let (valid_min, valid_max) = opt
-                .kind
-                .bounds()
-                .unwrap_or_else(|| panic!("{key} is not numeric"));
-            assert!(
-                valid_min <= *min && *max <= valid_max,
-                "{key}: UI range {min}..{max} escapes the valid range {valid_min}..{valid_max}"
-            );
-        }
-    }
-
     /// A category that falls through to the fallback icon is a category whose
     /// id no longer matches the icon table.
     #[test]
@@ -1209,6 +954,20 @@ mod tests {
     fn the_catalogs_are_never_empty() {
         assert!(!get_system_fonts().is_empty());
         assert!(!get_ghostty_themes().is_empty());
+    }
+
+
+    /// An option with no hint shows the generic placeholder, in whichever
+    /// language — so a hintless option never shows an empty field.
+    #[test]
+    fn a_hintless_option_gets_the_generic_placeholder() {
+        let opt = lookup("background").expect("a hintless text option exists");
+        let restore = i18n::current();
+        for lang in Lang::ALL {
+            i18n::set(*lang);
+            assert!(!opt_hint_text(opt).s().is_empty());
+        }
+        i18n::set(restore);
     }
 
 }

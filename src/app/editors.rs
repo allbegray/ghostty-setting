@@ -7,26 +7,36 @@
 //! sites and drifted — a slider dropped its paired text field while the field
 //! dropped the slider, written as two one-way rules 330 lines apart.
 //!
-//! The cache owns the maps and the one rule. A caller says what it is, and
-//! [`EditorCache::invalidate`] keeps that editor standing while dropping the
-//! rest of the key's editors, because the widget that produced a change is
-//! already showing the new value.
+//! The cache owns the maps, the one eviction rule, and the write-back. A
+//! caller says which editor it wants for a key and gets the entity; whether
+//! this is the first frame, which subscription reports the change, and which
+//! slot to leave standing are the cache's facts, not things a call site
+//! computes. An entry pairs the editor with its subscription, so evicting one
+//! drops the other: the listener list does not grow, and a widget that would
+//! show a stale value cannot keep writing.
 
 use std::collections::HashMap;
 
 use gpui_kit::component::{
     IndexPath,
-    color_picker::ColorPickerState,
-    input::InputState,
+    color_picker::{ColorPickerEvent, ColorPickerState},
+    input::{InputEvent, InputState},
     searchable_list::SearchableVec,
-    select::SelectState,
-    slider::SliderState,
+    select::{SelectEvent, SelectState},
+    slider::{SliderEvent, SliderState},
 };
-use gpui_kit::{App, AppContext as _, Entity, Hsla, SharedString, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Window};
+
+
+use super::SettingsView;
+use crate::config::schema::Opt;
+use crate::i18n::Text;
+use crate::app::commit::Reported;
+use crate::app::value;
 
 /// One of the four editor kinds the cache retains.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Slot {
+enum Slot {
     Input,
     Select,
     Color,
@@ -54,7 +64,7 @@ impl Kept {
     /// The whole eviction rule: the editor that produced a change keeps its
     /// state, and every other editor for that key is rebuilt from the file.
     /// Written as a predicate so it can be tested without a window.
-    pub fn keeps(self, slot: Slot) -> bool {
+    fn keeps(self, slot: Slot) -> bool {
         matches!(
             (self, slot),
             (Kept::Input, Slot::Input)
@@ -65,44 +75,73 @@ impl Kept {
     }
 }
 
+/// Every slot the cache retains. The tests walk this list, so a slot added
+/// without the rule answering for it fails a test.
+#[cfg(test)]
+const ALL_SLOTS: [Slot; 4] = [Slot::Input, Slot::Select, Slot::Color, Slot::Slider];
+
+/// A retained editor and its write-back subscription.
+///
+/// They are one entry because they are one thing: the editor is alive exactly
+/// as long as its subscription is attached. Removing the entry drops the
+/// subscription, so a widget that would show a stale value stops reporting.
+struct Retained<T> {
+    editor: Entity<T>,
+    _subscription: Subscription,
+}
+
 /// Editors retained for the option rows, keyed by option key.
 #[derive(Default)]
 pub struct EditorCache {
-    inputs: HashMap<&'static str, Entity<InputState>>,
-    selects: HashMap<&'static str, Entity<SelectState<SearchableVec<SharedString>>>>,
-    colors: HashMap<&'static str, Entity<ColorPickerState>>,
-    sliders: HashMap<&'static str, Entity<SliderState>>,
+    inputs: HashMap<&'static str, Retained<InputState>>,
+    selects: HashMap<&'static str, Retained<SelectState<SearchableVec<SharedString>>>>,
+    colors: HashMap<&'static str, Retained<ColorPickerState>>,
+    sliders: HashMap<&'static str, Retained<SliderState>>,
 }
 
 impl EditorCache {
-    /// The text field for `key`, created on first use.
+    /// The text field for `key`, created on first use, with its write-back.
     ///
-    /// The flag says whether this call created it, so the caller can attach the
-    /// write-back subscription exactly once.
+    /// The field reports what it holds, as it holds it; what a blank value
+    /// means for the file is the [`crate::app::commit`] module's rule, not the
+    /// cache's.
     pub fn input(
         &mut self,
         key: &'static str,
         seed: &str,
-        placeholder: &str,
+        placeholder: Text,
         window: &mut Window,
-        cx: &mut App,
-    ) -> (Entity<InputState>, bool) {
-        let created = !self.inputs.contains_key(key);
-        let state = self.inputs.entry(key).or_insert_with(|| {
-            cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(placeholder)
-                    .default_value(seed.to_string())
-            })
+        cx: &mut Context<SettingsView>,
+    ) -> Entity<InputState> {
+        if let Some(entry) = self.inputs.get(key) {
+            return entry.editor.clone();
+        }
+        let editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(placeholder.s())
+                .default_value(seed.to_string())
         });
-        (state.clone(), created)
+        let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                let value = state.read(cx).value().to_string();
+                this.commit(key, Reported::Typed(value), cx);
+            }
+        });
+        self.inputs.insert(
+            key,
+            Retained {
+                editor: editor.clone(),
+                _subscription: subscription,
+            },
+        );
+        editor
     }
 
     /// The numeric field for `key`, created on first use.
     ///
     /// It lives in the same map as the plain text field — both are text inputs
     /// and a value change invalidates them together — but it carries the bounds
-    /// and step its control needs.
+    /// and step its control needs. Its write-back is the same rule.
     pub fn number_input(
         &mut self,
         key: &'static str,
@@ -111,59 +150,105 @@ impl EditorCache {
         max: f64,
         step: f64,
         window: &mut Window,
-        cx: &mut App,
-    ) -> (Entity<InputState>, bool) {
-        let created = !self.inputs.contains_key(key);
-        let state = self.inputs.entry(key).or_insert_with(|| {
-            cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(seed.to_string())
-                    .min(min)
-                    .max(max)
-                    .step(step)
-            })
+        cx: &mut Context<SettingsView>,
+    ) -> Entity<InputState> {
+        if let Some(entry) = self.inputs.get(key) {
+            return entry.editor.clone();
+        }
+        let editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(seed.to_string())
+                .min(min)
+                .max(max)
+                .step(step)
         });
-        (state.clone(), created)
+        let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                let value = state.read(cx).value().to_string();
+                this.commit(key, Reported::Typed(value), cx);
+            }
+        });
+        self.inputs.insert(
+            key,
+            Retained {
+                editor: editor.clone(),
+                _subscription: subscription,
+            },
+        );
+        editor
     }
 
     /// The dropdown for `key`, created on first use.
+    ///
+    /// A dropdown reports the value the user confirmed.
     pub fn select(
         &mut self,
         key: &'static str,
         items: Vec<SharedString>,
         selected: Option<IndexPath>,
         window: &mut Window,
-        cx: &mut App,
-    ) -> (Entity<SelectState<SearchableVec<SharedString>>>, bool) {
-        let created = !self.selects.contains_key(key);
-        let state = self.selects.entry(key).or_insert_with(|| {
-            cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx))
+        cx: &mut Context<SettingsView>,
+    ) -> Entity<SelectState<SearchableVec<SharedString>>> {
+        if let Some(entry) = self.selects.get(key) {
+            return entry.editor.clone();
+        }
+        let editor = cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx));
+        let subscription = cx.subscribe(&editor, move |this, _, event, cx| {
+            let SelectEvent::Confirm(value) = event;
+            if let Some(value) = value {
+                this.commit(key, Reported::Chosen { slot: Kept::Select, value: value.to_string() }, cx);
+            }
         });
-        (state.clone(), created)
+        self.selects.insert(
+            key,
+            Retained {
+                editor: editor.clone(),
+                _subscription: subscription,
+            },
+        );
+        editor
     }
 
     /// The colour picker for `key`, created on first use.
+    ///
+    /// A picker reports the colour the user settled on, as the hex the file
+    /// holds.
     pub fn color(
         &mut self,
         key: &'static str,
-        value: Option<Hsla>,
+        value: Option<gpui_kit::Hsla>,
         window: &mut Window,
-        cx: &mut App,
-    ) -> (Entity<ColorPickerState>, bool) {
-        let created = !self.colors.contains_key(key);
-        let state = self.colors.entry(key).or_insert_with(|| {
-            cx.new(|cx| {
-                let mut state = ColorPickerState::new(window, cx);
-                if let Some(value) = value {
-                    state.set_value(value, window, cx);
-                }
-                state
-            })
+        cx: &mut Context<SettingsView>,
+    ) -> Entity<ColorPickerState> {
+        if let Some(entry) = self.colors.get(key) {
+            return entry.editor.clone();
+        }
+        let editor = cx.new(|cx| {
+            let mut state = ColorPickerState::new(window, cx);
+            if let Some(value) = value {
+                state.set_value(value, window, cx);
+            }
+            state
         });
-        (state.clone(), created)
+        let subscription = cx.subscribe(&editor, move |this, _, event, cx| {
+            if let ColorPickerEvent::Change(Some(color)) = event {
+                this.commit(key, Reported::Chosen { slot: Kept::Color, value: value::hex(*color) }, cx);
+            }
+        });
+        self.colors.insert(
+            key,
+            Retained {
+                editor: editor.clone(),
+                _subscription: subscription,
+            },
+        );
+        editor
     }
 
     /// The slider for `key`, created on first use.
+    ///
+    /// `decimal` is whether a change writes its fractional part: an opacity
+    /// keeps `0.85`, a cell width keeps whole numbers.
     pub fn slider(
         &mut self,
         key: &'static str,
@@ -171,19 +256,39 @@ impl EditorCache {
         min: f32,
         max: f32,
         step: f32,
-        cx: &mut App,
-    ) -> (Entity<SliderState>, bool) {
-        let created = !self.sliders.contains_key(key);
-        let state = self.sliders.entry(key).or_insert_with(|| {
-            cx.new(|_| {
-                SliderState::new()
-                    .min(min)
-                    .max(max)
-                    .step(step)
-                    .default_value(value)
-            })
+        decimal: bool,
+        cx: &mut Context<SettingsView>,
+    ) -> Entity<SliderState> {
+        if let Some(entry) = self.sliders.get(key) {
+            return entry.editor.clone();
+        }
+        let editor = cx.new(|_| {
+            SliderState::new()
+                .min(min)
+                .max(max)
+                .step(step)
+                .default_value(value)
         });
-        (state.clone(), created)
+        let subscription = cx.subscribe(&editor, move |this, _, event, cx| {
+            let (SliderEvent::Change(val) | SliderEvent::Release(val)) = event;
+            let new_val = if decimal {
+                format!("{:.2}", val.start())
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            } else {
+                format!("{}", val.start().round() as i64)
+            };
+            this.commit(key, Reported::Chosen { slot: Kept::Slider, value: new_val }, cx);
+        });
+        self.sliders.insert(
+            key,
+            Retained {
+                editor: editor.clone(),
+                _subscription: subscription,
+            },
+        );
+        editor
     }
 
     /// Discard the editors for `key` that would show a stale value.
@@ -213,17 +318,34 @@ impl EditorCache {
         self.sliders.clear();
     }
 
-    /// Discard only the text fields, whose placeholders carry localized copy.
-    pub fn forget_inputs(&mut self) {
-        self.inputs.clear();
+    /// Re-resolve every retained field's placeholder in the active language.
+    ///
+    /// Covers the row fields only; a field a modal owns is the modal's to
+    /// refresh.
+    ///
+    /// A field's placeholder is localized copy it took at construction, so a
+    /// language switch leaves it stale. Refreshing it in place keeps what the
+    /// user has typed — where dropping the fields would lose it.
+    pub fn refresh_placeholders(
+        &mut self,
+        placeholder: fn(&'static Opt) -> Text,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for (key, entry) in self.inputs.iter_mut() {
+            let Some(opt) = crate::config::schema::lookup(key) else {
+                continue;
+            };
+            entry.editor.update(cx, |state, cx| {
+                state.set_placeholder(placeholder(opt).s(), window, cx)
+            });
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const ALL_SLOTS: [Slot; 4] = [Slot::Input, Slot::Select, Slot::Color, Slot::Slider];
 
     /// The invariant the whole module exists for: a change drops every editor
     /// for its key except the one that produced it.

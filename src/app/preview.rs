@@ -7,10 +7,25 @@
 //! only way to check them was to look at the panel.
 
 use super::*;
+use super::commit::Reported;
 
 /// What the preview draws for a file with nothing set.
-const DEFAULT_FONT: &str = "JetBrains Mono";
-const DEFAULT_FONT_SIZE: f32 = 13.5;
+///
+/// The font family and size read their defaults from the control policy, so
+/// the preview and the editor's fallbacks cannot drift apart. This is also
+/// where the two font-size writers used to be: the preview rested at 13.5
+/// while the editor's slider rested at 13.0.
+/// The size an unset font-size rests at, read from the slider's default.
+fn default_font_size() -> f32 {
+    controls::slider("font-size")
+        .expect("font-size has a slider")
+        .default as f32
+}
+
+/// The family an unset font-family falls back to.
+fn default_font() -> String {
+    controls::DEFAULT_FONT.to_string()
+}
 const DEFAULT_THEME: &str = "tokyo-night";
 const DEFAULT_CURSOR_STYLE: &str = "block";
 const DEFAULT_BG: &str = "#1a1b26";
@@ -45,11 +60,11 @@ impl PreviewModel {
     /// Every other key falls back to the value the preview shows for an
     /// unconfigured file, and opacity is clamped to what a window can draw.
     pub fn from(file: &LineFile) -> Self {
-        let font_family = file.get("font-family").unwrap_or_else(|| DEFAULT_FONT.to_string());
+        let font_family = file.get("font-family").unwrap_or_else(default_font);
         let font_size = file
             .get("font-size")
             .and_then(|size| size.parse().ok())
-            .unwrap_or(DEFAULT_FONT_SIZE);
+            .unwrap_or_else(default_font_size);
         let theme_name = file.get("theme").unwrap_or_else(|| DEFAULT_THEME.to_string());
         let cursor_style = file
             .get("cursor-style")
@@ -446,7 +461,7 @@ impl SettingsView {
                             .child(name)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.commit("theme", Some(name), Kept::Nothing, cx);
+                                    this.commit("theme", Reported::Chosen { slot: Kept::Nothing, value: name.to_string() }, cx);
                                 });
                             })
                     })),
@@ -465,7 +480,7 @@ impl SettingsView {
                 h_flex()
                     .gap_1()
                     .flex_wrap()
-                    .children(POPULAR_FONTS.iter().map(|&font| {
+                    .children(controls::POPULAR_FONTS.iter().map(|&font| {
                         let view = view.clone();
                         let is_active = font_family == font;
                         div()
@@ -490,7 +505,7 @@ impl SettingsView {
                             .child(font)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.commit("font-family", Some(font), Kept::Nothing, cx);
+                                    this.commit("font-family", Reported::Chosen { slot: Kept::Nothing, value: font.to_string() }, cx);
                                 });
                             })
                     })),
@@ -534,8 +549,10 @@ mod tests {
     #[test]
     fn an_empty_file_gets_the_defaults() {
         let model = PreviewModel::from(&file(&[]));
-        assert_eq!(model.font_family, DEFAULT_FONT);
-        assert_eq!(model.font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(model.font_family, default_font());
+        // The default the slider rests at, which is the one deliberate value
+        // this app has: the preview and the editor used to disagree here.
+        assert_eq!(model.font_size, 13.0);
         assert_eq!(model.theme_name, DEFAULT_THEME);
         assert_eq!(model.cursor_style, DEFAULT_CURSOR_STYLE);
         assert_eq!(model.background_hex, DEFAULT_BG);

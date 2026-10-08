@@ -5,60 +5,53 @@
 //! knows only the option, the view and the window.
 
 use super::*;
+use super::commit::Reported;
+use super::row_rules;
+use super::controls::{self, Slider as SliderPolicy};
+use gpui_kit::App;
+use super::list_editor::ListEditorModal;
 use crate::app::value::{self, Stored};
 
 fn render_bounded_slider_number(
     this: &mut SettingsView,
     key: &'static str,
     val_str: &str,
-    default_val: f64,
     min: f64,
     max: f64,
-    step: f64,
-    is_float: bool,
-    unit: Option<&'static str>,
+    slider: &SliderPolicy,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
     let num_state = this.get_or_create_number_input(
         key,
-        &format!("{default_val}"),
+        &format!("{}", slider.default),
         min,
         max,
-        step,
+        slider.step,
         window,
         cx,
     );
 
     let mut num_input = NumberInput::new(&num_state).small();
-    if let Some(suf) = unit {
+    if let Some(unit) = slider.unit {
         num_input = num_input.suffix(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(suf),
+                .child(unit.s()),
         );
     }
 
-    let cur: f32 = val_str.parse().unwrap_or(default_val as f32);
-    let (slider_state, created) =
-        this.editors
-            .slider(key, cur, min as f32, max as f32, step as f32, cx);
-    if created {
-        cx.subscribe(&slider_state, move |this, _, event, cx| {
-            let (SliderEvent::Change(val) | SliderEvent::Release(val)) = event;
-            let new_val = if is_float {
-                format!("{:.2}", val.start())
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string()
-            } else {
-                format!("{}", val.start().round() as i64)
-            };
-            this.commit(key, Some(&new_val), Kept::Slider, cx);
-        })
-        .detach();
-    }
+    let cur: f32 = val_str.parse().unwrap_or(slider.default as f32);
+    let slider_state = this.editors.slider(
+        key,
+        cur,
+        min as f32,
+        max as f32,
+        slider.step as f32,
+        slider.decimal,
+        cx,
+    );
 
     h_flex()
         .gap_3()
@@ -76,10 +69,53 @@ fn render_bounded_slider_number(
         .into_any_element()
 }
 
+/// A quick-value chip: it lights when it carries the value the file holds,
+/// and writing its value is a click.
+fn chip(
+    key: &'static str,
+    label: &Text,
+    target: &'static str,
+    current_val: &str,
+    view: Entity<SettingsView>,
+    cx: &App,
+) -> impl IntoElement {
+    let is_active = row_rules::chip_is_active(current_val, target);
+    let target_str = target.to_string();
+    div()
+        .id(format!("{key}-chip-{target}"))
+        .cursor_pointer()
+        .px_1p5()
+        .py(px(1.))
+        .rounded_sm()
+        .border_1()
+        .text_xs()
+        .when(is_active, |s| {
+            s.bg(cx.theme().primary.opacity(0.12))
+                .border_color(cx.theme().primary)
+                .text_color(cx.theme().primary)
+        })
+        .when(!is_active, |s| {
+            s.bg(cx.theme().background)
+                .border_color(cx.theme().border)
+                .text_color(cx.theme().muted_foreground)
+                .hover(|s| s.text_color(cx.theme().foreground))
+        })
+        .child(label.s())
+        .on_click(move |_, _, cx| {
+            view.update(cx, |this, cx| {
+                this.commit(
+                    key,
+                    Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() },
+                    cx,
+                );
+            })
+        })
+}
+
 fn render_chips_only(
     key: &'static str,
     current_val: &str,
-    chips: &[(&'static str, &'static str)],
+    chips: &[(Text, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -87,34 +123,7 @@ fn render_chips_only(
         .gap_1()
         .flex_wrap()
         .children(chips.iter().map(|(label, target)| {
-            let is_active = current_val == *target;
-            let view = view.clone();
-            let target_str = target.to_string();
-            div()
-                .id(format!("{key}-chip-{label}"))
-                .cursor_pointer()
-                .px_1p5()
-                .py(px(1.))
-                .rounded_sm()
-                .border_1()
-                .text_xs()
-                .when(is_active, |s| {
-                    s.bg(cx.theme().primary.opacity(0.12))
-                        .border_color(cx.theme().primary)
-                        .text_color(cx.theme().primary)
-                })
-                .when(!is_active, |s| {
-                    s.bg(cx.theme().background)
-                        .border_color(cx.theme().border)
-                        .text_color(cx.theme().muted_foreground)
-                        .hover(|s| s.text_color(cx.theme().foreground))
-                })
-                .child(*label)
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| {
-                        this.commit(key, Some(&target_str), Kept::Nothing, cx);
-                    });
-                })
+            chip(key, label, target, &current_val, view.clone(), cx)
         }))
         .into_any_element()
 }
@@ -122,7 +131,7 @@ fn render_input_with_chips(
     state: &Entity<InputState>,
     key: &'static str,
     current_val: &str,
-    chips: &[(&'static str, &'static str)],
+    chips: &[(Text, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -139,35 +148,9 @@ fn render_input_with_chips(
                 .gap_1()
                 .flex_wrap()
                 .children(chips.iter().map(|(label, target)| {
-                    let is_active = current_val == *target;
-                    let view = view.clone();
-                    let target_str = target.to_string();
-                    div()
-                        .id(format!("{key}-chip-{label}"))
-                        .cursor_pointer()
-                        .px_1p5()
-                        .py(px(1.))
-                        .rounded_sm()
-                        .border_1()
-                        .text_xs()
-                        .when(is_active, |s| {
-                            s.bg(cx.theme().primary.opacity(0.12))
-                                .border_color(cx.theme().primary)
-                                .text_color(cx.theme().primary)
-                        })
-                        .when(!is_active, |s| {
-                            s.bg(cx.theme().background)
-                                .border_color(cx.theme().border)
-                                .text_color(cx.theme().muted_foreground)
-                                .hover(|s| s.text_color(cx.theme().foreground))
-                        })
-                        .child(*label)
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.commit(key, Some(&target_str), Kept::Nothing, cx);
-                            });
-                        })
+                    chip(key, label, target, &current_val, view.clone(), cx)
                 }))
+                .into_any_element()
         )
         .into_any_element()
 }
@@ -188,7 +171,7 @@ pub(super) fn value_editor(
                 .on_change(move |&value, _, cx| {
                     view.update(cx, |this, cx| {
                         let value = if value { "true" } else { "false" };
-                        this.commit(key, Some(value), Kept::Nothing, cx);
+                        this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: value.to_string() }, cx);
                     });
                 })
                 .into_any_element()
@@ -200,17 +183,7 @@ pub(super) fn value_editor(
             let selected = Stored::new(current.as_deref())
                 .index_in(&items_vec)
                 .map(IndexPath::new);
-            let (state, created) =
-                this.editors
-                    .select(opt.key, items_vec, selected, window, cx);
-            if created {
-                let key = opt.key;
-                cx.subscribe(&state, move |this, _, event, cx| {
-                    let SelectEvent::Confirm(value) = event;
-                    this.commit(key, value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
-                })
-                .detach();
-            }
+            let state = this.editors.select(opt.key, items_vec, selected, window, cx);
             div()
                 .max_w(px(260.))
                 .child(Select::new(&state).small())
@@ -219,100 +192,36 @@ pub(super) fn value_editor(
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
             let key = opt.key;
             let current_val = this.file.get(key).unwrap_or_default();
-            let (bound_min, bound_max) = edit_bounds(opt);
+            let (bound_min, bound_max) = controls::edit_bounds(opt);
 
+            if let Some(slider) = controls::slider(key) {
+                return render_bounded_slider_number(
+                    this,
+                    key,
+                    &current_val,
+                    bound_min,
+                    bound_max,
+                    &slider,
+                    window,
+                    cx,
+                );
+            }
             match key {
-                "font-size" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    13.0,
-                    bound_min,
-                    bound_max,
-                    1.0,
-                    true,
-                    Some("pt"),
-                    window,
-                    cx,
-                ),
-                "background-opacity" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.05,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "cursor-opacity" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.05,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "minimum-contrast" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    1.0,
-                    bound_min,
-                    bound_max,
-                    0.5,
-                    true,
-                    None,
-                    window,
-                    cx,
-                ),
-                "window-width" => {
-                    let num_state = this.get_or_create_number_input(key, "80", bound_min, bound_max, 10.0, window, cx);
+                "window-width" | "window-height" => {
+                    let field = controls::size_field(key).expect("the window sizes have a field");
+                    let num_state = this.get_or_create_number_input(key, field.default, bound_min, bound_max, field.step, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("열", "cols").s()),
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(field.unit.map(|u| u.s()).unwrap_or("")),
                     );
                     h_flex()
                         .gap_2()
                         .items_center()
                         .child(div().w(px(120.)).child(num_input))
-                        .child(render_chips_only(key, &current_val, &[("80", "80"), ("100", "100"), ("120", "120"), ("140", "140")], cx.entity(), cx))
+                        .child(render_chips_only(key, &current_val, controls::size_chips(key).expect("the window sizes have chips"), cx.entity(), cx))
                         .into_any_element()
                 }
-                "window-height" => {
-                    let num_state = this.get_or_create_number_input(key, "24", bound_min, bound_max, 5.0, window, cx);
-                    let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("행", "rows").s()),
-                    );
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(div().w(px(120.)).child(num_input))
-                        .child(render_chips_only(key, &current_val, &[("24", "24"), ("30", "30"), ("40", "40"), ("50", "50")], cx.entity(), cx))
-                        .into_any_element()
-                }
-                "font-thicken-strength" => render_bounded_slider_number(
-                    this,
-                    key,
-                    &current_val,
-                    0.0,
-                    bound_min,
-                    bound_max,
-                    16.0,
-                    false,
-                    None,
-                    window,
-                    cx,
-                ),
                 "working-directory" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
+                    let state = this.get_or_create_input(opt, window, cx);
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -338,8 +247,7 @@ pub(super) fn value_editor(
                                             if let Some(path) = result {
                                                 this.commit(
                                                     "working-directory",
-                                                    Some(&path),
-                                                    Kept::Nothing,
+                                                    Reported::Chosen { slot: Kept::Nothing, value: path },
                                                     cx,
                                                 );
                                             }
@@ -359,139 +267,17 @@ pub(super) fn value_editor(
                     let selected = Stored::new(current.as_deref())
                         .index_in(&items_vec)
                         .map(IndexPath::new);
-                    let (theme_select, created) =
-                        this.editors
-                            .select("theme", items_vec, selected, window, cx);
-                    if created {
-                        cx.subscribe(&theme_select, move |this, _, event, cx| {
-                            let SelectEvent::Confirm(value) = event;
-                            this.commit("theme", value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
-                        })
-                        .detach();
-                    }
+                    let theme_select = this.editors.select(key, items_vec, selected, window, cx);
                     div()
                         .max_w(px(260.))
                         .child(Select::new(&theme_select).small())
                         .into_any_element()
                 }
-                "command" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            ("/bin/zsh", "/bin/zsh"),
-                            ("/bin/bash", "/bin/bash"),
-                            ("fish", "/opt/homebrew/bin/fish"),
-                            ("tmux", "tmux"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "background-blur" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            (Text::new("끔 (false)", "Off (false)").s(), "false"),
-                            (Text::new("은은하게 (10)", "Subtle (10)").s(), "10"),
-                            (Text::new("기본 (20)", "Default (20)").s(), "20"),
-                            (Text::new("강하게 (40)", "Strong (40)").s(), "40"),
-                            ("Glass Regular", "macos-glass-regular"),
-                            ("Glass Clear", "macos-glass-clear"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "scrollback-limit" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            ("10MB", "10000000"),
-                            ("50MB", "50000000"),
-                            ("100MB", "100000000"),
-                            ("500MB", "500000000"),
-                            ("1GB", "1000000000"),
-                            (Text::new("무제한 (0)", "Unlimited (0)").s(), "0"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "window-padding-x" | "window-padding-y" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            ("0", "0"),
-                            ("4", "4"),
-                            ("8", "8"),
-                            ("12", "12"),
-                            ("16", "16"),
-                            ("24", "24"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "mouse-scroll-multiplier" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            (Text::new("1x (느림)", "1x (slow)").s(), "1"),
-                            ("2x", "2"),
-                            (Text::new("3x (기본)", "3x (default)").s(), "3"),
-                            (Text::new("5x (빠름)", "5x (fast)").s(), "5"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "adjust-cell-width" | "adjust-cell-height" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[
-                            ("-1", "-1"),
-                            ("0", "0"),
-                            ("+1", "1"),
-                            ("+2", "2"),
-                            ("-5%", "-5%"),
-                            ("+5%", "5%"),
-                            ("+10%", "10%"),
-                        ],
-                        cx.entity(),
-                        cx,
-                    )
-                }
-                "selection-word-chars" => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
-                    render_input_with_chips(
-                        &state,
-                        key,
-                        &current_val,
-                        &[(Text::new("기본값 복원", "Restore default").s(), "\\\\t'\\\"│`|:;,()[]{}<>$")],
-                        cx.entity(),
-                        cx,
-                    )
-                }
                 _ => {
-                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
+                    let state = this.get_or_create_input(opt, window, cx);
+                    if let Some(chips) = controls::chips(key) {
+                        return render_input_with_chips(&state, key, &current_val, chips, cx.entity(), cx);
+                    }
                     div()
                         .max_w(px(260.))
                         .child(Input::new(&state).small())
@@ -501,16 +287,7 @@ pub(super) fn value_editor(
         }
         Kind::Color { .. } => {
             let current = Stored::new(this.file.get(opt.key).as_deref()).color();
-            let (state, created) = this.editors.color(opt.key, current, window, cx);
-            if created {
-                let key = opt.key;
-                cx.subscribe(&state, move |this, _, event, cx| {
-                    if let ColorPickerEvent::Change(Some(color)) = event {
-                        this.commit(key, Some(&value::hex(*color)), Kept::Color, cx);
-                    }
-                })
-                .detach();
-            }
+            let state = this.editors.color(opt.key, current, window, cx);
             let current_text = this.file.get(opt.key).unwrap_or_default();
             h_flex()
                 .items_center()
@@ -537,9 +314,10 @@ pub(super) fn value_editor(
         }
         Kind::List => {
             let all = this.file.get_all(opt.key);
+            let (binding_shown, binding_more) = row_rules::binding_summary(&all);
             let key = opt.key;
             let view = cx.entity();
-            let is_keybind = key == "keybind";
+            let is_keybind = matches!(list_editor::ListKind::of(key), list_editor::ListKind::Keybind);
 
             h_flex()
                 .gap_2()
@@ -576,8 +354,8 @@ pub(super) fn value_editor(
                                         let SelectEvent::Confirm(value) = event;
                                         if let Some(val) = value {
                                             let act = val.split(" · ").next().unwrap_or(val.as_ref()).to_string();
-                                            if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
-                                                *selected_action = act;
+                                            if let Some(modal) = this.list_editor() {
+                                                modal.choose_action(act);
                                                 cx.notify();
                                             }
                                         }
@@ -601,8 +379,8 @@ pub(super) fn value_editor(
                                     cx.subscribe(&state, |this, _, event, cx| {
                                         let SelectEvent::Confirm(value) = event;
                                         if let Some(val) = value {
-                                            if let Some(ActiveModal::ListEditor { selected_font, .. }) = &mut this.active_modal {
-                                                *selected_font = val.to_string();
+                                            if let Some(modal) = this.list_editor() {
+                                                modal.choose_font(val.to_string());
                                                 cx.notify();
                                             }
                                         }
@@ -612,7 +390,7 @@ pub(super) fn value_editor(
                                     None
                                 };
                                 let selected_font = if key == "font-family" {
-                                    get_system_fonts().first().cloned().unwrap_or_else(|| "JetBrains Mono".into())
+                                    get_system_fonts().first().cloned().unwrap_or_else(|| controls::DEFAULT_FONT.to_string())
                                 } else {
                                     String::new()
                                 };
@@ -621,18 +399,20 @@ pub(super) fn value_editor(
                                 } else {
                                     String::new()
                                 };
-                                this.active_modal = Some(ActiveModal::ListEditor {
-                                    key,
-                                    items,
-                                    recorded_trigger: String::new(),
-                                    selected_action,
-                                    action_select,
-                                    font_select,
-                                    selected_font,
-                                    is_recording: false,
-                                    recorder_focus,
-                                    new_item_input,
-                                });
+                                this.active_modal = Some(ActiveModal::ListEditor(
+                                    ListEditorModal::open(
+                                        key,
+                                        items,
+                                        String::new(),
+                                        selected_action,
+                                        action_select,
+                                        font_select,
+                                        selected_font,
+                                        false,
+                                        recorder_focus,
+                                        new_item_input,
+                                    ),
+                                ));
                                 cx.notify();
                             });
                         }),
@@ -648,10 +428,7 @@ pub(super) fn value_editor(
                         h_flex()
                             .gap_1p5()
                             .items_center()
-                            .children(all.iter().take(2).map(|item| {
-                                let parts: Vec<&str> = item.splitn(2, '=').collect();
-                                let trigger = parts[0];
-                                let action = parts.get(1).unwrap_or(&"");
+                            .children(binding_shown.into_iter().map(|(trigger, action)| {
                                 let pretty = ghostty_trigger_to_pretty(trigger);
                                 h_flex()
                                     .gap_1()
@@ -682,12 +459,12 @@ pub(super) fn value_editor(
                                             })),
                                     )
                             }))
-                            .children(if all.len() > 2 {
+                            .children(if binding_more > 0 {
                                 Some(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(Text::new("외 {}개", "+{} more").fill(&[&(all.len() - 2).to_string()])),
+                                        .child(Text::new("외 {}개", "+{} more").fill(&[&binding_more.to_string()])),
                                 )
                             } else {
                                 None
@@ -740,7 +517,7 @@ pub(super) fn value_editor(
                 .flex_wrap()
                 .items_center()
                 .children(allowed_items.iter().map(|&flag| {
-                    let is_active = current_flags.iter().any(|f| f == flag);
+                    let is_active = row_rules::flag_is_active(&current_flags, flag);
                     let view = view.clone();
                     let current_flags = current_flags.clone();
                     div()
@@ -782,8 +559,10 @@ pub(super) fn value_editor(
                                 } else {
                                     new_flags.push(flag.to_string());
                                 }
-                                let value = value::flags_value(&new_flags);
-                                this.commit(key, value.as_deref(), Kept::Nothing, cx);
+                                match value::flags_value(&new_flags) {
+                                    Some(value) => this.commit(key, Reported::Chosen { slot: Kept::Nothing, value }, cx),
+                                    None => this.commit(key, Reported::Cleared, cx),
+                                }
                             });
                         })
                 }))

@@ -1,68 +1,187 @@
 //! The modal that edits a repeatable option's list.
 //!
 //! One option key drives five different editors — a plain list, a font list, a
-//! key-binding recorder, an OpenType feature list and the extra config files —
-//! through four booleans that are re-tested at twenty-six sites. The modal is
-//! the only part of the view that touches `active_modal`, so it lives behind
-//! that seam: the list arithmetic, the recorder and the quick-add chips are its
-//! implementation.
+//! key-binding recorder, an OpenType feature list and the extra config files.
+//! The shape is derived once from the key into [`ListKind`], and every arm
+//! reads that one value instead of re-testing which key it holds. The list's
+//! own rules live in [`super::list_items`]; the modal's state is
+//! [`ListEditorModal`], reached through the view's `list_editor` accessor.
 
 use super::*;
+use super::list_items::ListItems;
+use super::row_rules;
+
+/// The state of the list-editor modal.
+///
+/// A named module of its own rather than eleven fields on an enum variant:
+/// the renderer takes one of these, the open site constructs one, and the
+/// handlers reach in through the view's accessor. `items` carries its own
+/// rules (see [`super::list_items`]).
+pub(crate) struct ListEditorModal {
+    pub(crate) key: &'static str,
+    pub(crate) items: ListItems,
+    pub(crate) recorded_trigger: String,
+    pub(crate) selected_action: String,
+    pub(crate) action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    pub(crate) font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    pub(crate) selected_font: String,
+    pub(crate) is_recording: bool,
+    pub(crate) recorder_focus: FocusHandle,
+    pub(crate) new_item_input: Entity<InputState>,
+}
+
+impl ListEditorModal {
+    /// Open the modal for `key`, seeded with the file's values.
+    ///
+    /// The opening site gathers what only it can create — the focus handle, the
+    /// typed-input field, and the dropdowns its key family needs — and hands
+    /// them here, so the modal's shape is the modal's to describe.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open(
+        key: &'static str,
+        items: Vec<String>,
+        recorded_trigger: String,
+        selected_action: String,
+        action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+        selected_font: String,
+        is_recording: bool,
+        recorder_focus: FocusHandle,
+        new_item_input: Entity<InputState>,
+    ) -> Self {
+        Self {
+            key,
+            items: ListItems::from_values(items),
+            recorded_trigger,
+            selected_action,
+            action_select,
+            font_select,
+            selected_font,
+            is_recording,
+            recorder_focus,
+            new_item_input,
+        }
+    }
+
+    /// Record the action the keybinding's dropdown confirmed.
+    pub(crate) fn choose_action(&mut self, action: String) {
+        self.selected_action = action;
+    }
+
+    /// Record the font the dropdown confirmed.
+    pub(crate) fn choose_font(&mut self, font: String) {
+        self.selected_font = font;
+    }
+}
+
+
+/// The keys the modal's shapes are written for.
+///
+/// The list editor exists for repeatable keys; these are the four whose shape
+/// is not the generic one, and a test in this module checks each is one.
+#[cfg(test)]
+pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-feature", "config-file"];
+
+impl ListEditorModal {
+    /// Add what the typed input holds, then clear it.
+    ///
+    /// The three text-input shapes (feature, config path, generic item) share
+    /// this: read the field, add through the list, clear the field, re-render.
+    /// A blank value adds nothing and leaves the field alone.
+    pub(crate) fn add_typed_item(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<SettingsView>,
+    ) -> bool {
+        let value = self.new_item_input.read(cx).value().to_string();
+        if !self.items.add(&value) {
+            return false;
+        }
+        self.new_item_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        true
+    }
+}
+
+/// Which list a key holds, derived once from the key.
+///
+/// The five shapes the modal draws are one dispatch on this value, so no arm
+/// re-tests which key it holds.
+pub(crate) enum ListKind {
+    /// Any other repeatable key: one input, one add.
+    Plain,
+    /// `font-family`: a system-font dropdown and coding-font chips.
+    Font,
+    /// `keybind`: a keystroke recorder and an action dropdown.
+    Keybind,
+    /// `font-feature`: a typed input and OpenType feature chips.
+    Feature,
+    /// `config-file`: a path picker and a typed path.
+    Config,
+}
+
+impl ListKind {
+    /// The shape a key's list editor takes.
+    pub(crate) fn of(key: &str) -> Self {
+        match key {
+            "keybind" => ListKind::Keybind,
+            "font-family" => ListKind::Font,
+            "font-feature" => ListKind::Feature,
+            "config-file" => ListKind::Config,
+            _ => ListKind::Plain,
+        }
+    }
+}
+
 
 impl SettingsView {
     pub(super) fn render_list_editor_modal(
         &self,
-        key: &'static str,
-        items: &[String],
-        recorded_trigger: &str,
-        selected_action: &str,
-        action_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
-        font_select: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
-        selected_font: &str,
-        is_recording: bool,
-        recorder_focus: &FocusHandle,
-        new_item_input: &Entity<InputState>,
+        modal: &ListEditorModal,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let is_keybind = key == "keybind";
-        let is_font = key == "font-family";
-        let is_config = key == "config-file";
-        let is_feature = key == "font-feature";
+        let ListEditorModal {
+            key,
+            items,
+            recorded_trigger,
+            selected_action,
+            action_select,
+            font_select,
+            selected_font,
+            is_recording,
+            recorder_focus,
+            new_item_input,
+        } = modal;
+        let key = *key;
+        let is_recording = *is_recording;
+        let action_select = action_select.as_ref();
+        let font_select = font_select.as_ref();
+        let selected_font = selected_font.as_str();
+        let kind = ListKind::of(key);
         let opt_label = lookup(key).map(|o| o.label.s()).unwrap_or(key);
         let view = cx.entity();
 
-        let icon = if is_keybind {
-            IconName::Keyboard
-        } else if is_font || is_feature {
-            IconName::Type
-        } else if is_config {
-            IconName::FileText
-        } else {
-            IconName::Pencil
+        let icon = match kind {
+            ListKind::Keybind => IconName::Keyboard,
+            ListKind::Font | ListKind::Feature => IconName::Type,
+            ListKind::Config => IconName::FileText,
+            ListKind::Plain => IconName::Pencil,
         };
 
-        let title = if is_keybind {
-            Text::new("키 바인딩 설정 (`keybind`)", "Configure key bindings (`keybind`)").s().to_string()
-        } else if is_font {
-            Text::new("글꼴 우선순위 설정 (`font-family`)", "Configure font priority (`font-family`)").s().to_string()
-        } else if is_feature {
-            Text::new("OpenType 기능 설정 (`font-feature`)", "Configure OpenType features (`font-feature`)").s().to_string()
-        } else if is_config {
-            Text::new("추가 설정 파일 불러오기 (`config-file`)", "Load additional config files (`config-file`)").s().to_string()
-        } else {
-            Text::new("{} 목록 편집 (`{}`)", "Edit {} list (`{}`)").fill(&[opt_label, key])
+        let title = match kind {
+            ListKind::Keybind => Text::new("키 바인딩 설정 (`keybind`)", "Configure key bindings (`keybind`)").s().to_string(),
+            ListKind::Font => Text::new("글꼴 우선순위 설정 (`font-family`)", "Configure font priority (`font-family`)").s().to_string(),
+            ListKind::Feature => Text::new("OpenType 기능 설정 (`font-feature`)", "Configure OpenType features (`font-feature`)").s().to_string(),
+            ListKind::Config => Text::new("추가 설정 파일 불러오기 (`config-file`)", "Load additional config files (`config-file`)").s().to_string(),
+            ListKind::Plain => Text::new("{} 목록 편집 (`{}`)", "Edit {} list (`{}`)").fill(&[opt_label, key]),
         };
 
-        let subtitle = if is_keybind {
-            Text::new("단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다.", "Record a shortcut and choose the Ghostty action to run.").s()
-        } else if is_font {
-            Text::new("시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다.", "Select a font installed on your system or add a popular coding font to set the priority order.").s()
-        } else if is_feature {
-            Text::new("폰트의 프로그래밍 합자(Ligatures) 및 특수 글리프 기능을 켜고 끕니다.", "Turn programming ligatures and special glyph features on or off.").s()
-        } else if is_config {
-            Text::new("파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다.", "Browse for additional config files or add a path directly.").s()
-        } else {
-            Text::new("설정 파일에 반복 지정되는 항목 목록을 관리합니다.", "Manage the list of items that can be repeated in the config file.").s()
+        let subtitle = match kind {
+            ListKind::Keybind => Text::new("단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다.", "Record a shortcut and choose the Ghostty action to run.").s(),
+            ListKind::Font => Text::new("시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다.", "Select a font installed on your system or add a popular coding font to set the priority order.").s(),
+            ListKind::Feature => Text::new("폰트의 프로그래밍 합자(Ligatures) 및 특수 글리프 기능을 켜고 끕니다.", "Turn programming ligatures and special glyph features on or off.").s(),
+            ListKind::Config => Text::new("파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다.", "Browse for additional config files or add a path directly.").s(),
+            ListKind::Plain => Text::new("설정 파일에 반복 지정되는 항목 목록을 관리합니다.", "Manage the list of items that can be repeated in the config file.").s(),
         };
         let header = h_flex()
             .items_center()
@@ -134,12 +253,10 @@ impl SettingsView {
                 } else {
                     v_flex()
                         .gap_1()
-                        .children(items.iter().enumerate().map(|(ix, item)| {
+                        .children(items.as_slice().iter().enumerate().map(|(ix, item)| {
                             let view = view.clone();
-                            if is_keybind {
-                                let parts: Vec<&str> = item.splitn(2, '=').collect();
-                                let trigger = parts[0];
-                                let action = parts.get(1).unwrap_or(&"");
+                            if matches!(kind, ListKind::Keybind) {
+                                let (trigger, action) = row_rules::binding_parts(item);
                                 let pretty = ghostty_trigger_to_pretty(trigger);
                                 h_flex()
                                     .id(format!("binding-item-{ix}"))
@@ -197,11 +314,9 @@ impl SettingsView {
                                             .tooltip(Text::new("삭제", "Delete").s())
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
-                                                    if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                        if ix < items.len() {
-                                                            items.remove(ix);
-                                                            cx.notify();
-                                                        }
+                                                    if let Some(modal) = this.list_editor() {
+                                                        modal.items.remove_at(ix);
+                                                        cx.notify();
                                                     }
                                                 });
                                             }),
@@ -232,11 +347,9 @@ impl SettingsView {
                                             .tooltip(Text::new("삭제", "Delete").s())
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
-                                                    if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                        if ix < items.len() {
-                                                            items.remove(ix);
-                                                            cx.notify();
-                                                        }
+                                                    if let Some(modal) = this.list_editor() {
+                                                        modal.items.remove_at(ix);
+                                                        cx.notify();
                                                     }
                                                 });
                                             }),
@@ -248,7 +361,7 @@ impl SettingsView {
                 }
             );
 
-        let add_section = if is_keybind {
+        let add_section = if matches!(kind, ListKind::Keybind) {
             let trigger_val = recorded_trigger.to_string();
             let act_val = selected_action.to_string();
             let is_rec = is_recording;
@@ -290,24 +403,24 @@ impl SettingsView {
                                         .hover(|s| s.border_color(cx.theme().muted_foreground))
                                 })
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(ActiveModal::ListEditor { is_recording, recorder_focus, .. }) = &mut this.active_modal {
-                                        *is_recording = true;
-                                        window.focus(recorder_focus, cx);
+                                    if let Some(modal) = this.list_editor() {
+                                        modal.is_recording = true;
+                                        window.focus(&modal.recorder_focus, cx);
                                         cx.notify();
                                     }
                                 }))
                                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                    if let Some(ActiveModal::ListEditor { is_recording, recorded_trigger, .. }) = &mut this.active_modal {
-                                        if *is_recording {
+                                    if let Some(modal) = this.list_editor() {
+                                        if modal.is_recording {
                                             let key_name = &event.keystroke.key;
                                             if key_name == "escape" {
-                                                *is_recording = false;
+                                                modal.is_recording = false;
                                                 cx.notify();
                                                 return;
                                             }
                                             if !is_modifier_key_name(key_name) {
-                                                *recorded_trigger = keystroke_to_ghostty_trigger(&event.keystroke);
-                                                *is_recording = false;
+                                                modal.recorded_trigger = keystroke_to_ghostty_trigger(&event.keystroke);
+                                                modal.is_recording = false;
                                                 cx.notify();
                                             }
                                         }
@@ -362,11 +475,11 @@ impl SettingsView {
                                 .label(Text::new("추가", "Add").s())
                                 .disabled(trigger_val.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(ActiveModal::ListEditor { recorded_trigger, items, selected_action, .. }) = &mut this.active_modal {
-                                        if !recorded_trigger.is_empty() && !selected_action.trim().is_empty() {
-                                            let entry = format!("{recorded_trigger}={}", selected_action.trim());
-                                            items.push(entry);
-                                            recorded_trigger.clear();
+                                    if let Some(modal) = this.list_editor() {
+                                        if !modal.recorded_trigger.is_empty() && !modal.selected_action.trim().is_empty() {
+                                            let entry = format!("{}={}", modal.recorded_trigger, modal.selected_action.trim());
+                                            modal.items.add(&entry);
+                                            modal.recorded_trigger.clear();
                                             cx.notify();
                                         }
                                     }
@@ -407,8 +520,8 @@ impl SettingsView {
                                         .child(format!("{} ({})", desc.s(), act))
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
-                                                if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
-                                                    *selected_action = act_str.clone();
+                                                if let Some(modal) = this.list_editor() {
+                                                    modal.selected_action = act_str.clone();
                                                     cx.notify();
                                                 }
                                             });
@@ -417,7 +530,7 @@ impl SettingsView {
                         )
                 )
                 .into_any_element()
-        } else if is_font {
+        } else if matches!(kind, ListKind::Font) {
             let sel_font = selected_font.to_string();
             let view = view.clone();
             v_flex()
@@ -451,10 +564,11 @@ impl SettingsView {
                                 .label(Text::new("글꼴 추가", "Add font").s())
                                 .disabled(sel_font.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(ActiveModal::ListEditor { items, selected_font, .. }) = &mut this.active_modal {
-                                        if !selected_font.trim().is_empty() {
-                                            items.push(selected_font.trim().to_string());
-                                            cx.notify();
+                                    if let Some(modal) = this.list_editor() {
+                                        if !modal.selected_font.trim().is_empty() {
+                                            if modal.items.add_unique(&modal.selected_font) {
+                                                cx.notify();
+                                            }
                                         }
                                     }
                                 }))
@@ -468,7 +582,7 @@ impl SettingsView {
                             h_flex()
                                 .gap_1()
                                 .flex_wrap()
-                                .children(POPULAR_FONTS.iter().map(|&font_name| {
+                                .children(controls::POPULAR_FONTS.iter().map(|&font_name| {
                                     let view = view.clone();
                                     div()
                                         .id(format!("popular-font-{font_name}"))
@@ -485,9 +599,8 @@ impl SettingsView {
                                         .child(format!("+ {font_name}"))
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
-                                                if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                    if !items.iter().any(|f| f == font_name) {
-                                                        items.push(font_name.to_string());
+                                                if let Some(modal) = this.list_editor() {
+                                                    if modal.items.add_unique(font_name) {
                                                         cx.notify();
                                                     }
                                                 }
@@ -497,7 +610,7 @@ impl SettingsView {
                         )
                 )
                 .into_any_element()
-        } else if is_config {
+        } else if matches!(kind, ListKind::Config) {
             h_flex()
                 .gap_2()
                 .items_center()
@@ -520,9 +633,10 @@ impl SettingsView {
 
                                 this.update(cx, |this, cx| {
                                     if let Some(path) = result {
-                                        if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                            items.push(path);
-                                            cx.notify();
+                                        if let Some(modal) = this.list_editor() {
+                                            if modal.items.add(&path) {
+                                                cx.notify();
+                                            }
                                         }
                                     }
                                 }).ok();
@@ -536,20 +650,15 @@ impl SettingsView {
                         .icon(IconName::Plus)
                         .label(Text::new("경로 추가", "Add path").s())
                         .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
-                                let val = new_item_input.read(cx).value().to_string();
-                                if !val.trim().is_empty() {
-                                    items.push(val.trim().to_string());
-                                    new_item_input.update(cx, |inp, cx| {
-                                        inp.set_value("", window, cx);
-                                    });
+                            if let Some(modal) = this.list_editor() {
+                                if modal.add_typed_item(window, cx) {
                                     cx.notify();
                                 }
                             }
                         }))
                 )
                 .into_any_element()
-        } else if is_feature {
+        } else if matches!(kind, ListKind::Feature) {
             const POPULAR_FEATURES: &[(&str, Text)] = &[
                 ("-calt", Text::new("합자 끄기", "Ligatures off")),
                 ("+calt", Text::new("합자 켜기", "Ligatures on")),
@@ -587,13 +696,8 @@ impl SettingsView {
                                 .icon(IconName::Plus)
                                 .label(Text::new("추가", "Add").s())
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
-                                        let val = new_item_input.read(cx).value().to_string();
-                                        if !val.trim().is_empty() {
-                                            items.push(val.trim().to_string());
-                                            new_item_input.update(cx, |inp, cx| {
-                                                inp.set_value("", window, cx);
-                                            });
+                                    if let Some(modal) = this.list_editor() {
+                                        if modal.add_typed_item(window, cx) {
                                             cx.notify();
                                         }
                                     }
@@ -625,9 +729,8 @@ impl SettingsView {
                                         .child(format!("{feat} ({})", desc.s()))
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
-                                                if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
-                                                    if !items.iter().any(|f| f == feat) {
-                                                        items.push(feat.to_string());
+                                                if let Some(modal) = this.list_editor() {
+                                                    if modal.items.add_unique(feat) {
                                                         cx.notify();
                                                     }
                                                 }
@@ -653,13 +756,8 @@ impl SettingsView {
                         .icon(IconName::Plus)
                         .label(Text::new("항목 추가", "Add item").s())
                         .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
-                                let val = new_item_input.read(cx).value().to_string();
-                                if !val.trim().is_empty() {
-                                    items.push(val.trim().to_string());
-                                    new_item_input.update(cx, |inp, cx| {
-                                        inp.set_value("", window, cx);
-                                    });
+                            if let Some(modal) = this.list_editor() {
+                                if modal.add_typed_item(window, cx) {
                                     cx.notify();
                                 }
                             }
@@ -692,9 +790,9 @@ impl SettingsView {
                     .icon(IconName::Check)
                     .label(Text::new("적용하기", "Apply").s())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(ActiveModal::ListEditor { key, items, .. }) = &this.active_modal {
-                            let k = *key;
-                            let items_clone = items.clone();
+                        if let Some(ActiveModal::ListEditor(modal)) = &this.active_modal {
+                            let k = modal.key;
+                            let items_clone = modal.items.as_slice().to_vec();
                             this.commit_all(k, &items_clone, cx);
                             this.active_modal = None;
                             this.notice = Some(
@@ -728,5 +826,25 @@ impl SettingsView {
                     .child(footer)
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The modal's shapes are written for these keys, and every one of them
+    /// is a repeatable key: a shape for a non-repeatable option would be dead
+    /// code, and a repeatable key without its shape falls to the generic
+    /// editor.
+    #[test]
+    fn every_list_modal_key_is_a_repeatable_key() {
+        for key in LIST_MODAL_KEYS {
+            let opt = lookup(key).unwrap_or_else(|| panic!("{key} is not an option"));
+            assert!(
+                matches!(opt.kind, crate::config::schema::Kind::List),
+                "'{key}' opens the list modal but is not a repeatable key"
+            );
+        }
     }
 }
