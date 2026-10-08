@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod i18n;
 
 use app::{FocusSearch, Save, SettingsView};
 use gpui_kit::component::TitleBar;

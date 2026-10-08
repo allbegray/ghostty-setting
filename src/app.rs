@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -25,7 +26,10 @@ use gpui_kit::component::{
     IndexPath,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
-    h_flex, v_flex,
+    h_flex,
+    hover_card::HoverCard,
+    link::Link,
+    v_flex,
     input::{Input, InputEvent, InputState, NumberInput},
     scroll::{ScrollableElement as _, Scrollbar, ScrollbarMode},
     select::{Select, SelectEvent, SelectState},
@@ -39,7 +43,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
+    Anchor, AppContext as _, Context, Entity, FocusHandle, Focusable as _, IntoElement,
     InteractiveElement as _, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, actions,
     div, px,
@@ -49,6 +53,7 @@ use gpui_kit::base::Disableable as _;
 use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
 use crate::config::{self};
+use crate::i18n::{self, Lang, Text};
 
 fn category_icon(idx: usize) -> IconName {
     match idx {
@@ -64,64 +69,65 @@ fn category_icon(idx: usize) -> IconName {
         _ => IconName::Zap,
     }
 }
+
 actions!(settings, [Save, FocusSearch]);
-pub const GHOSTTY_ACTIONS: &[(&str, &str)] = &[
-    ("copy_to_clipboard", "클립보드에 복사"),
-    ("paste_from_clipboard", "클립보드에서 붙여넣기"),
-    ("paste_from_selection", "선택 영역 붙여넣기"),
-    ("copy_url_to_clipboard", "마지막 URL 복사"),
-    ("copy_title_to_clipboard", "창 제목 복사"),
-    ("select_all", "전체 선택"),
-    ("adjust_selection:left", "선택 영역 왼쪽 확장"),
-    ("adjust_selection:right", "선택 영역 오른쪽 확장"),
-    ("new_window", "새 창 열기"),
-    ("new_tab", "새 탭 열기"),
-    ("close_tab", "현재 탭 닫기"),
-    ("close_surface", "현재 서피스(분할) 닫기"),
-    ("close_window", "현재 창 닫기"),
-    ("close_all_windows", "모든 창 닫기"),
-    ("previous_tab", "이전 탭으로 이동"),
-    ("next_tab", "다음 탭으로 이동"),
-    ("last_tab", "마지막 탭으로 이동"),
-    ("goto_tab:1", "1번 탭으로 이동"),
-    ("goto_tab:2", "2번 탭으로 이동"),
-    ("goto_tab:3", "3번 탭으로 이동"),
-    ("goto_tab:4", "4번 탭으로 이동"),
-    ("goto_tab:5", "5번 탭으로 이동"),
-    ("toggle_tab_overview", "탭 개요(오버뷰) 토글"),
-    ("new_split:right", "오른쪽에 분할 창 생성"),
-    ("new_split:down", "아래쪽에 분할 창 생성"),
-    ("goto_split:next", "다음 분할 창으로 이동"),
-    ("goto_split:previous", "이전 분할 창으로 이동"),
-    ("goto_split:top", "위쪽 분할 창으로 이동"),
-    ("goto_split:bottom", "아래쪽 분할 창으로 이동"),
-    ("goto_split:left", "왼쪽 분할 창으로 이동"),
-    ("goto_split:right", "오른쪽 분할 창으로 이동"),
-    ("toggle_split_zoom", "분할 창 확대/축소 토글"),
-    ("equalize_splits", "분할 창 크기 균등화"),
-    ("clear_screen", "화면 지우기"),
-    ("scroll_to_top", "맨 위로 스크롤"),
-    ("scroll_to_bottom", "맨 아래로 스크롤"),
-    ("scroll_page_up", "한 페이지 위로 스크롤"),
-    ("scroll_page_down", "한 페이지 아래로 스크롤"),
-    ("jump_to_prompt:1", "다음 쉘 프롬프트로 이동"),
-    ("jump_to_prompt:-1", "이전 쉘 프롬프트로 이동"),
-    ("increase_font_size:1", "글꼴 크기 확대 (+1)"),
-    ("decrease_font_size:1", "글꼴 크기 축소 (-1)"),
-    ("reset_font_size", "글꼴 크기 기본값 초기화"),
-    ("toggle_fullscreen", "전체화면 토글"),
-    ("toggle_maximize", "창 최대화 토글"),
-    ("toggle_quick_terminal", "퀵 터미널 토글"),
-    ("toggle_command_palette", "커맨드 팔레트 열기"),
-    ("toggle_window_decorations", "창 프레임/장식 토글"),
-    ("toggle_window_float_on_top", "항상 위에 표시 토글"),
-    ("toggle_visibility", "창 보이기/숨기기 토글"),
-    ("toggle_background_opacity", "배경 불투명도 토글"),
-    ("open_config", "설정 파일 열기"),
-    ("reload_config", "설정 파일 다시 로드"),
-    ("inspector", "Ghostty 인스펙터 열기"),
-    ("reset", "터미널 세션 리셋"),
-    ("quit", "Ghostty 종료"),
+pub const GHOSTTY_ACTIONS: &[(&str, Text)] = &[
+    ("copy_to_clipboard", Text::new("클립보드에 복사", "Copy to clipboard")),
+    ("paste_from_clipboard", Text::new("클립보드에서 붙여넣기", "Paste from clipboard")),
+    ("paste_from_selection", Text::new("선택 영역 붙여넣기", "Paste from selection")),
+    ("copy_url_to_clipboard", Text::new("마지막 URL 복사", "Copy last URL")),
+    ("copy_title_to_clipboard", Text::new("창 제목 복사", "Copy window title")),
+    ("select_all", Text::new("전체 선택", "Select all")),
+    ("adjust_selection:left", Text::new("선택 영역 왼쪽 확장", "Extend selection left")),
+    ("adjust_selection:right", Text::new("선택 영역 오른쪽 확장", "Extend selection right")),
+    ("new_window", Text::new("새 창 열기", "Open new window")),
+    ("new_tab", Text::new("새 탭 열기", "Open new tab")),
+    ("close_tab", Text::new("현재 탭 닫기", "Close current tab")),
+    ("close_surface", Text::new("현재 서피스(분할) 닫기", "Close current surface (split)")),
+    ("close_window", Text::new("현재 창 닫기", "Close current window")),
+    ("close_all_windows", Text::new("모든 창 닫기", "Close all windows")),
+    ("previous_tab", Text::new("이전 탭으로 이동", "Go to previous tab")),
+    ("next_tab", Text::new("다음 탭으로 이동", "Go to next tab")),
+    ("last_tab", Text::new("마지막 탭으로 이동", "Go to last tab")),
+    ("goto_tab:1", Text::new("1번 탭으로 이동", "Go to tab 1")),
+    ("goto_tab:2", Text::new("2번 탭으로 이동", "Go to tab 2")),
+    ("goto_tab:3", Text::new("3번 탭으로 이동", "Go to tab 3")),
+    ("goto_tab:4", Text::new("4번 탭으로 이동", "Go to tab 4")),
+    ("goto_tab:5", Text::new("5번 탭으로 이동", "Go to tab 5")),
+    ("toggle_tab_overview", Text::new("탭 개요(오버뷰) 토글", "Toggle tab overview")),
+    ("new_split:right", Text::new("오른쪽에 분할 창 생성", "Create split on the right")),
+    ("new_split:down", Text::new("아래쪽에 분할 창 생성", "Create split below")),
+    ("goto_split:next", Text::new("다음 분할 창으로 이동", "Go to next split")),
+    ("goto_split:previous", Text::new("이전 분할 창으로 이동", "Go to previous split")),
+    ("goto_split:top", Text::new("위쪽 분할 창으로 이동", "Go to split above")),
+    ("goto_split:bottom", Text::new("아래쪽 분할 창으로 이동", "Go to split below")),
+    ("goto_split:left", Text::new("왼쪽 분할 창으로 이동", "Go to split on the left")),
+    ("goto_split:right", Text::new("오른쪽 분할 창으로 이동", "Go to split on the right")),
+    ("toggle_split_zoom", Text::new("분할 창 확대/축소 토글", "Toggle split zoom")),
+    ("equalize_splits", Text::new("분할 창 크기 균등화", "Equalize splits")),
+    ("clear_screen", Text::new("화면 지우기", "Clear screen")),
+    ("scroll_to_top", Text::new("맨 위로 스크롤", "Scroll to top")),
+    ("scroll_to_bottom", Text::new("맨 아래로 스크롤", "Scroll to bottom")),
+    ("scroll_page_up", Text::new("한 페이지 위로 스크롤", "Scroll page up")),
+    ("scroll_page_down", Text::new("한 페이지 아래로 스크롤", "Scroll page down")),
+    ("jump_to_prompt:1", Text::new("다음 쉘 프롬프트로 이동", "Go to next shell prompt")),
+    ("jump_to_prompt:-1", Text::new("이전 쉘 프롬프트로 이동", "Go to previous shell prompt")),
+    ("increase_font_size:1", Text::new("글꼴 크기 확대 (+1)", "Increase font size (+1)")),
+    ("decrease_font_size:1", Text::new("글꼴 크기 축소 (-1)", "Decrease font size (-1)")),
+    ("reset_font_size", Text::new("글꼴 크기 기본값 초기화", "Reset font size to default")),
+    ("toggle_fullscreen", Text::new("전체화면 토글", "Toggle fullscreen")),
+    ("toggle_maximize", Text::new("창 최대화 토글", "Toggle maximized window")),
+    ("toggle_quick_terminal", Text::new("퀵 터미널 토글", "Toggle quick terminal")),
+    ("toggle_command_palette", Text::new("커맨드 팔레트 열기", "Open command palette")),
+    ("toggle_window_decorations", Text::new("창 프레임/장식 토글", "Toggle window decorations")),
+    ("toggle_window_float_on_top", Text::new("항상 위에 표시 토글", "Toggle always on top")),
+    ("toggle_visibility", Text::new("창 보이기/숨기기 토글", "Toggle window visibility")),
+    ("toggle_background_opacity", Text::new("배경 불투명도 토글", "Toggle background opacity")),
+    ("open_config", Text::new("설정 파일 열기", "Open config file")),
+    ("reload_config", Text::new("설정 파일 다시 로드", "Reload config file")),
+    ("inspector", Text::new("Ghostty 인스펙터 열기", "Open Ghostty inspector")),
+    ("reset", Text::new("터미널 세션 리셋", "Reset terminal session")),
+    ("quit", Text::new("Ghostty 종료", "Quit Ghostty")),
 ];
 
 fn action_description(action: &str) -> Option<&'static str> {
@@ -129,7 +135,7 @@ fn action_description(action: &str) -> Option<&'static str> {
     GHOSTTY_ACTIONS
         .iter()
         .find(|(a, _)| *a == action || a.split(':').next() == Some(base))
-        .map(|(_, d)| *d)
+        .map(|(_, d)| d.s())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,9 +260,12 @@ fn ghostty_trigger_to_pretty(trigger: &str) -> String {
 }
 
 fn pick_folder() -> Option<String> {
+    let prompt = Text::new("Ghostty 작업 디렉터리 선택", "Select Ghostty working directory").s();
     let output = std::process::Command::new("osascript")
         .arg("-e")
-        .arg("POSIX path of (choose folder with prompt \"Ghostty 작업 디렉터리 선택\")")
+        .arg(format!(
+            "POSIX path of (choose folder with prompt \"{prompt}\")"
+        ))
         .output()
         .ok()?;
     if output.status.success() {
@@ -269,9 +278,10 @@ fn pick_folder() -> Option<String> {
 }
 
 fn pick_file() -> Option<String> {
+    let prompt = Text::new("Ghostty 설정 파일 선택", "Select Ghostty config file").s();
     let output = std::process::Command::new("osascript")
         .arg("-e")
-        .arg("POSIX path of (choose file with prompt \"Ghostty 설정 파일 선택\")")
+        .arg(format!("POSIX path of (choose file with prompt \"{prompt}\")"))
         .output()
         .ok()?;
     if output.status.success() {
@@ -469,6 +479,9 @@ pub struct SettingsView {
     /// Values held here are the editing surface; the file is only written
     /// once the row's subscription has both the key and the new text.
     text_inputs: HashMap<&'static str, Entity<InputState>>,
+    /// Interface-language picker. Kept out of `selects` because it must
+    /// survive the widget reset that a language switch performs.
+    lang_select: Entity<SelectState<SearchableVec<SharedString>>>,
     selects: HashMap<&'static str, Entity<SelectState<SearchableVec<SharedString>>>>,
     colors: HashMap<&'static str, Entity<ColorPickerState>>,
     sliders: HashMap<&'static str, Entity<SliderState>>,
@@ -480,13 +493,35 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, path: Option<PathBuf>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("옵션 검색  ( / )"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s()));
         let subscription = cx.subscribe_in(&search_input, window, |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search = state.read(cx).value().to_string();
                 cx.notify();
             }
         });
+        let lang_items: Vec<SharedString> = Lang::ALL
+            .iter()
+            .map(|lang| SharedString::from(lang.native_label()))
+            .collect();
+        let lang_selected = Lang::ALL
+            .iter()
+            .position(|lang| *lang == i18n::current())
+            .map(IndexPath::new);
+        let lang_select = cx
+            .new(|cx| SelectState::new(SearchableVec::new(lang_items), lang_selected, window, cx));
+        let lang_subscription = cx.subscribe_in(
+            &lang_select,
+            window,
+            |this, _, event, window, cx| {
+                let SelectEvent::Confirm(Some(value)) = event else {
+                    return;
+                };
+                if let Some(lang) = Lang::from_native_label(value.as_ref()) {
+                    this.apply_language(lang, window, cx);
+                }
+            },
+        );
         let path = path.unwrap_or_else(config::default_path);
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         Self {
@@ -498,14 +533,44 @@ impl SettingsView {
             search_input,
             notice: None,
             text_inputs: HashMap::new(),
+            lang_select,
             selects: HashMap::new(),
             colors: HashMap::new(),
             sliders: HashMap::new(),
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, lang_subscription],
             active_modal: None,
             show_preview: true,
             scroll_handle: ScrollHandle::default(),
         }
+    }
+
+    /// Switch the interface language.
+    ///
+    /// Copy resolved while rendering follows on its own; widgets that captured
+    /// a localized placeholder when they were created do not. Those are
+    /// dropped here and rebuilt from the file on the next frame, which loses
+    /// no edits: every keystroke is already written through to the file.
+    fn apply_language(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
+        if i18n::current() == lang {
+            return;
+        }
+        i18n::set(lang);
+        self.text_inputs.clear();
+        self.search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s())
+                .default_value(self.search.clone())
+        });
+        let subscription =
+            cx.subscribe_in(&self.search_input, window, |this, state, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.search = state.read(cx).value().to_string();
+                    cx.notify();
+                }
+            });
+        self._subscriptions.push(subscription);
+        self.notice = None;
+        cx.notify();
     }
 
     fn dirty(&self) -> bool {
@@ -515,7 +580,10 @@ impl SettingsView {
     fn save(&mut self, cx: &mut Context<Self>) {
         if let Some(parent) = self.path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                self.notice = Some(format!("디렉터리 생성 실패: {e}"));
+                self.notice = Some(
+                    Text::new("디렉터리 생성 실패: {}", "Couldn't create directory: {}")
+                        .fill(&[&e.to_string()]),
+                );
                 cx.notify();
                 return;
             }
@@ -524,9 +592,14 @@ impl SettingsView {
         match std::fs::write(&self.path, &rendered) {
             Ok(()) => {
                 self.original = rendered;
-                self.notice = Some(format!("저장됨 · {}", self.path.display()));
+                self.notice = Some(
+                    Text::new("저장됨 · {}", "Saved · {}").fill(&[&self.path.display().to_string()]),
+                );
             }
-            Err(e) => self.notice = Some(format!("저장 실패: {e}")),
+            Err(e) => {
+                self.notice =
+                    Some(Text::new("저장 실패: {}", "Couldn't save: {}").fill(&[&e.to_string()]))
+            }
         }
         cx.notify();
     }
@@ -535,7 +608,7 @@ impl SettingsView {
         let text = std::fs::read_to_string(&self.path).unwrap_or_default();
         self.file = LineFile::parse(&text);
         self.original = text;
-        self.notice = Some("파일 내용을 다시 불러왔습니다.".to_string());
+        self.notice = Some(Text::new("파일 내용을 다시 불러왔습니다.", "File reloaded.").s().to_string());
         // Row states mirror the file, so drop them and let render rebuild.
         self.text_inputs.clear();
         self.selects.clear();
@@ -595,9 +668,13 @@ impl SettingsView {
             crate::config::schema::OPTS
                 .iter()
                 .filter(|o| {
+                    // Search every language, so a Korean user who knows the
+                    // English term (or the reverse) still finds the option.
                     o.key.contains(&q)
-                        || o.label.to_lowercase().contains(&q)
-                        || o.doc.to_lowercase().contains(&q)
+                        || Lang::ALL.iter().any(|lang| {
+                            o.label.get(*lang).to_lowercase().contains(&q)
+                                || o.doc.get(*lang).to_lowercase().contains(&q)
+                        })
                 })
                 .collect()
         }
@@ -619,7 +696,7 @@ impl SettingsView {
     ) -> Entity<InputState> {
         if !self.text_inputs.contains_key(key) {
             let seed = self.file.get(key).unwrap_or_default();
-            let placeholder = if !hint.is_empty() { hint } else { "값 입력" };
+            let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
             let state = cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(placeholder)
@@ -699,7 +776,7 @@ impl SettingsView {
         let is_font = key == "font-family";
         let is_config = key == "config-file";
         let is_feature = key == "font-feature";
-        let opt_label = lookup(key).map(|o| o.label).unwrap_or(key);
+        let opt_label = lookup(key).map(|o| o.label.s()).unwrap_or(key);
         let view = cx.entity();
 
         let icon = if is_keybind {
@@ -713,27 +790,27 @@ impl SettingsView {
         };
 
         let title = if is_keybind {
-            "키 바인딩 설정 (`keybind`)".to_string()
+            Text::new("키 바인딩 설정 (`keybind`)", "Configure key bindings (`keybind`)").s().to_string()
         } else if is_font {
-            "글꼴 우선순위 설정 (`font-family`)".to_string()
+            Text::new("글꼴 우선순위 설정 (`font-family`)", "Configure font priority (`font-family`)").s().to_string()
         } else if is_feature {
-            "OpenType 기능 설정 (`font-feature`)".to_string()
+            Text::new("OpenType 기능 설정 (`font-feature`)", "Configure OpenType features (`font-feature`)").s().to_string()
         } else if is_config {
-            "추가 설정 파일 불러오기 (`config-file`)".to_string()
+            Text::new("추가 설정 파일 불러오기 (`config-file`)", "Load additional config files (`config-file`)").s().to_string()
         } else {
-            format!("{opt_label} 목록 편집 (`{key}`)")
+            Text::new("{} 목록 편집 (`{}`)", "Edit {} list (`{}`)").fill(&[opt_label, key])
         };
 
         let subtitle = if is_keybind {
-            "단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다."
+            Text::new("단축키 입력을 녹음하고 실행할 Ghostty 동작을 지정합니다.", "Record a shortcut and choose the Ghostty action to run.").s()
         } else if is_font {
-            "시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다."
+            Text::new("시스템에 설치된 폰트를 선택하거나 인기 코딩 폰트를 추가하여 우선순위를 구성합니다.", "Select a font installed on your system or add a popular coding font to set the priority order.").s()
         } else if is_feature {
-            "폰트의 프로그래밍 합자(Ligatures) 및 특수 글리프 기능을 켜고 끕니다."
+            Text::new("폰트의 프로그래밍 합자(Ligatures) 및 특수 글리프 기능을 켜고 끕니다.", "Turn programming ligatures and special glyph features on or off.").s()
         } else if is_config {
-            "파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다."
+            Text::new("파일 탐색기로 추가 설정 파일을 찾아보거나 직접 경로를 추가합니다.", "Browse for additional config files or add a path directly.").s()
         } else {
-            "설정 파일에 반복 지정되는 항목 목록을 관리합니다."
+            Text::new("설정 파일에 반복 지정되는 항목 목록을 관리합니다.", "Manage the list of items that can be repeated in the config file.").s()
         };
         let header = h_flex()
             .items_center()
@@ -800,7 +877,7 @@ impl SettingsView {
                         .justify_center()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("등록된 항목이 없습니다.")
+                        .child(Text::new("등록된 항목이 없습니다.", "No items yet.").s())
                         .into_any_element()
                 } else {
                     v_flex()
@@ -865,7 +942,7 @@ impl SettingsView {
                                             .ghost()
                                             .xsmall()
                                             .icon(IconName::Trash)
-                                            .tooltip("삭제")
+                                            .tooltip(Text::new("삭제", "Delete").s())
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
                                                     if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
@@ -900,7 +977,7 @@ impl SettingsView {
                                             .ghost()
                                             .xsmall()
                                             .icon(IconName::Trash)
-                                            .tooltip("삭제")
+                                            .tooltip(Text::new("삭제", "Delete").s())
                                             .on_click(move |_, _, cx| {
                                                 view.update(cx, |this, cx| {
                                                     if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
@@ -933,7 +1010,7 @@ impl SettingsView {
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.15))
                 .child(
-                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 키 바인딩 추가")
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child(Text::new("새 키 바인딩 추가", "Add new key binding").s())
                 )
                 .child(
                     h_flex()
@@ -990,13 +1067,13 @@ impl SettingsView {
                                             .gap_1p5()
                                             .items_center()
                                             .child(div().size(px(6.)).rounded_full().bg(cx.theme().warning))
-                                            .child(div().text_xs().font_medium().child("키보드 입력 대기 중... (Esc: 취소)"))
+                                            .child(div().text_xs().font_medium().child(Text::new("키보드 입력 대기 중... (Esc: 취소)", "Waiting for keyboard input… (Esc to cancel)").s()))
                                     } else if trigger_val.is_empty() {
                                         h_flex()
                                             .gap_1p5()
                                             .items_center()
                                             .child(Icon::new(IconName::Keyboard).xsmall().text_color(cx.theme().muted_foreground))
-                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("클릭하여 단축키 입력..."))
+                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("클릭하여 단축키 입력...", "Click to enter a shortcut…").s()))
                                     } else {
                                         h_flex()
                                             .gap_1p5()
@@ -1012,7 +1089,7 @@ impl SettingsView {
                                                     .text_xs()
                                                     .child(ghostty_trigger_to_pretty(&trigger_val)),
                                             )
-                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("({trigger_val}) - 재입력 클릭")))
+                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("({}) - 재입력 클릭", "({}) - click to re-enter").fill(&[&trigger_val])))
                                     }
                                 )
                         )
@@ -1030,7 +1107,7 @@ impl SettingsView {
                                 .primary()
                                 .small()
                                 .icon(IconName::Plus)
-                                .label("추가")
+                                .label(Text::new("추가", "Add").s())
                                 .disabled(trigger_val.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(ActiveModal::ListEditor { recorded_trigger, items, selected_action, .. }) = &mut this.active_modal {
@@ -1047,7 +1124,7 @@ impl SettingsView {
                 .child(
                     v_flex()
                         .gap_1()
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 동작 빠른 선택 (클릭 시 자동 선택):"))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("자주 쓰는 동작 빠른 선택 (클릭 시 자동 선택):", "Common actions (click to select automatically):").s()))
                         .child(
                             h_flex()
                                 .gap_1()
@@ -1075,7 +1152,7 @@ impl SettingsView {
                                                 .text_color(cx.theme().muted_foreground)
                                                 .hover(|s| s.text_color(cx.theme().foreground))
                                         })
-                                        .child(format!("{desc} ({act})"))
+                                        .child(format!("{} ({})", desc.s(), act))
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
@@ -1099,7 +1176,7 @@ impl SettingsView {
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.15))
                 .child(
-                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 글꼴 추가 (시스템 설치 폰트 선택)")
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child(Text::new("새 글꼴 추가 (시스템 설치 폰트 선택)", "Add new font (pick from system fonts)").s())
                 )
                 .child(
                     h_flex()
@@ -1119,7 +1196,7 @@ impl SettingsView {
                                 .primary()
                                 .small()
                                 .icon(IconName::Plus)
-                                .label("글꼴 추가")
+                                .label(Text::new("글꼴 추가", "Add font").s())
                                 .disabled(sel_font.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(ActiveModal::ListEditor { items, selected_font, .. }) = &mut this.active_modal {
@@ -1134,7 +1211,7 @@ impl SettingsView {
                 .child(
                     v_flex()
                         .gap_1()
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("인기 코딩 폰트 빠른 추가:"))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("인기 코딩 폰트 빠른 추가:", "Quick add popular coding fonts:").s()))
                         .child(
                             h_flex()
                                 .gap_1()
@@ -1182,7 +1259,7 @@ impl SettingsView {
                         .outline()
                         .small()
                         .icon(IconName::FileText)
-                        .label("파일 찾아보기")
+                        .label(Text::new("파일 찾아보기", "Browse file").s())
                         .on_click(cx.listener(|_this, _, _, cx| {
                             cx.spawn(async move |this, cx| {
                                 let result = cx.background_spawn(async move {
@@ -1205,7 +1282,7 @@ impl SettingsView {
                         .primary()
                         .small()
                         .icon(IconName::Plus)
-                        .label("경로 추가")
+                        .label(Text::new("경로 추가", "Add path").s())
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                 let val = new_item_input.read(cx).value().to_string();
@@ -1221,15 +1298,15 @@ impl SettingsView {
                 )
                 .into_any_element()
         } else if is_feature {
-            const POPULAR_FEATURES: &[(&str, &str)] = &[
-                ("-calt", "합자 끄기"),
-                ("+calt", "합자 켜기"),
-                ("+liga", "기본 합자"),
-                ("+dlig", "임의 합자"),
-                ("+zero", "슬래시 0"),
-                ("+ss01", "스타일셋 1"),
-                ("+ss02", "스타일셋 2"),
-                ("+cv01", "문자변형 1"),
+            const POPULAR_FEATURES: &[(&str, Text)] = &[
+                ("-calt", Text::new("합자 끄기", "Ligatures off")),
+                ("+calt", Text::new("합자 켜기", "Ligatures on")),
+                ("+liga", Text::new("기본 합자", "Standard ligatures")),
+                ("+dlig", Text::new("임의 합자", "Discretionary ligatures")),
+                ("+zero", Text::new("슬래시 0", "Slashed zero")),
+                ("+ss01", Text::new("스타일셋 1", "Stylistic set 1")),
+                ("+ss02", Text::new("스타일셋 2", "Stylistic set 2")),
+                ("+cv01", Text::new("문자변형 1", "Character variant 1")),
             ];
             let view = view.clone();
             v_flex()
@@ -1240,7 +1317,7 @@ impl SettingsView {
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.15))
                 .child(
-                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child("새 OpenType 기능 추가")
+                    div().text_xs().font_semibold().text_color(cx.theme().foreground).child(Text::new("새 OpenType 기능 추가", "Add new OpenType feature").s())
                 )
                 .child(
                     h_flex()
@@ -1256,7 +1333,7 @@ impl SettingsView {
                                 .primary()
                                 .small()
                                 .icon(IconName::Plus)
-                                .label("추가")
+                                .label(Text::new("추가", "Add").s())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                         let val = new_item_input.read(cx).value().to_string();
@@ -1274,7 +1351,7 @@ impl SettingsView {
                 .child(
                     v_flex()
                         .gap_1()
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("자주 쓰는 기능 빠른 추가 (1클릭):"))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("자주 쓰는 기능 빠른 추가 (1클릭):", "Quick add common features (1 click):").s()))
                         .child(
                             h_flex()
                                 .gap_1()
@@ -1293,7 +1370,7 @@ impl SettingsView {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .hover(|s| s.text_color(cx.theme().foreground))
-                                        .child(format!("{feat} ({desc})"))
+                                        .child(format!("{feat} ({})", desc.s()))
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 if let Some(ActiveModal::ListEditor { items, .. }) = &mut this.active_modal {
@@ -1322,7 +1399,7 @@ impl SettingsView {
                         .primary()
                         .small()
                         .icon(IconName::Plus)
-                        .label("항목 추가")
+                        .label(Text::new("항목 추가", "Add item").s())
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(ActiveModal::ListEditor { items, new_item_input, .. }) = &mut this.active_modal {
                                 let val = new_item_input.read(cx).value().to_string();
@@ -1350,7 +1427,7 @@ impl SettingsView {
                 Button::new("cancel-list-modal")
                     .ghost()
                     .small()
-                    .label("취소")
+                    .label(Text::new("취소", "Cancel").s())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active_modal = None;
                         cx.notify();
@@ -1361,14 +1438,16 @@ impl SettingsView {
                     .primary()
                     .small()
                     .icon(IconName::Check)
-                    .label("적용하기")
+                    .label(Text::new("적용하기", "Apply").s())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(ActiveModal::ListEditor { key, items, .. }) = &this.active_modal {
                             let k = *key;
                             let items_clone = items.clone();
                             this.file.set_all(k, &items_clone);
                             this.active_modal = None;
-                            this.notice = Some(format!("'{k}' 설정이 반영되었습니다."));
+                            this.notice = Some(
+                                Text::new("'{}' 설정이 반영되었습니다.", "'{}' settings applied.").fill(&[k]),
+                            );
                             cx.notify();
                         }
                     })),
@@ -1478,7 +1557,7 @@ impl SettingsView {
                                     .gap_2()
                                     .items_center()
                                     .child(Icon::new(IconName::FileText).small().text_color(cx.theme().primary))
-                                    .child(div().text_base().font_semibold().child("변경 사항 미리보기 (Diff)")),
+                                    .child(div().text_base().font_semibold().child(Text::new("변경 사항 미리보기 (Diff)", "Preview changes (Diff)").s())),
                             )
                             .child(
                                 Button::new("close-diff")
@@ -1504,7 +1583,7 @@ impl SettingsView {
                                 Button::new("cancel-diff-btn")
                                     .ghost()
                                     .small()
-                                    .label("닫기")
+                                    .label(Text::new("닫기", "Close").s())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.active_modal = None;
                                         cx.notify();
@@ -1515,7 +1594,7 @@ impl SettingsView {
                                     .primary()
                                     .small()
                                     .icon(IconName::Check)
-                                    .label("이대로 저장")
+                                    .label(Text::new("이대로 저장", "Save as is").s())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.save(cx);
                                         this.active_modal = None;
@@ -1601,7 +1680,7 @@ impl SettingsView {
                             .small()
                             .text_color(cx.theme().primary),
                     )
-                    .child(div().font_semibold().text_sm().child("라이브 미리보기"))
+                    .child(div().font_semibold().text_sm().child(Text::new("라이브 미리보기", "Live preview").s()))
                     .child(
                         div()
                             .text_xs()
@@ -1611,7 +1690,7 @@ impl SettingsView {
                             .bg(cx.theme().primary.opacity(0.12))
                             .text_color(cx.theme().primary)
                             .font_medium()
-                            .child("실시간"),
+                            .child(Text::new("실시간", "Live").s()),
                     ),
             )
             .child(
@@ -1619,7 +1698,7 @@ impl SettingsView {
                     .ghost()
                     .xsmall()
                     .icon(IconName::X)
-                    .tooltip("패널 닫기")
+                    .tooltip(Text::new("패널 닫기", "Close panel").s())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_preview = false;
                         cx.notify();
@@ -1733,7 +1812,7 @@ impl SettingsView {
                     .text_xs()
                     .font_medium()
                     .text_color(cx.theme().muted_foreground)
-                    .child("테마 ANSI 팔레트:"),
+                    .child(Text::new("테마 ANSI 팔레트:", "Theme ANSI palette:").s()),
             )
             .child(
                 h_flex()
@@ -1762,7 +1841,7 @@ impl SettingsView {
                 h_flex()
                     .justify_between()
                     .text_xs()
-                    .child(div().text_color(cx.theme().muted_foreground).child("글꼴"))
+                    .child(div().text_color(cx.theme().muted_foreground).child(Text::new("글꼴", "Font").s()))
                     .child(
                         div()
                             .font_family("Menlo")
@@ -1773,7 +1852,7 @@ impl SettingsView {
                 h_flex()
                     .justify_between()
                     .text_xs()
-                    .child(div().text_color(cx.theme().muted_foreground).child("테마"))
+                    .child(div().text_color(cx.theme().muted_foreground).child(Text::new("테마", "Theme").s()))
                     .child(div().font_family("Menlo").child(theme_name.clone())),
             )
             .child(
@@ -1783,7 +1862,7 @@ impl SettingsView {
                     .child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("배경 / 불투명도"),
+                            .child(Text::new("배경 / 불투명도", "Background / opacity").s()),
                     )
                     .child(
                         div()
@@ -1798,7 +1877,7 @@ impl SettingsView {
                     .child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("커서 스타일"),
+                            .child(Text::new("커서 스타일", "Cursor style").s()),
                     )
                     .child(div().font_family("Menlo").child(cursor_style)),
             );
@@ -1810,7 +1889,7 @@ impl SettingsView {
                     .text_xs()
                     .font_medium()
                     .text_color(cx.theme().muted_foreground)
-                    .child("테마 빠른 변경:"),
+                    .child(Text::new("테마 빠른 변경:", "Quick theme switch:").s()),
             )
             .child(
                 h_flex()
@@ -1858,7 +1937,7 @@ impl SettingsView {
                     .text_xs()
                     .font_medium()
                     .text_color(cx.theme().muted_foreground)
-                    .child("글꼴 빠른 변경:"),
+                    .child(Text::new("글꼴 빠른 변경:", "Quick font switch:").s()),
             )
             .child(
                 h_flex()
@@ -2025,7 +2104,7 @@ fn render_bounded_slider_number(
 fn render_chips_only(
     key: &'static str,
     current_val: &str,
-    chips: &'static [(&'static str, &'static str)],
+    chips: &[(&'static str, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -2072,7 +2151,7 @@ fn render_input_with_chips(
     state: &Entity<InputState>,
     key: &'static str,
     current_val: &str,
-    chips: &'static [(&'static str, &'static str)],
+    chips: &[(&'static str, &'static str)],
     view: Entity<SettingsView>,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
@@ -2242,7 +2321,7 @@ fn value_widget(
                 "window-width" => {
                     let num_state = this.get_or_create_number_input(key, "80", 20.0, 500.0, 10.0, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child("열"),
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("열", "cols").s()),
                     );
                     h_flex()
                         .gap_2()
@@ -2254,7 +2333,7 @@ fn value_widget(
                 "window-height" => {
                     let num_state = this.get_or_create_number_input(key, "24", 10.0, 200.0, 5.0, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child("행"),
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(Text::new("행", "rows").s()),
                     );
                     h_flex()
                         .gap_2()
@@ -2277,7 +2356,7 @@ fn value_widget(
                     cx,
                 ),
                 "working-directory" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -2291,8 +2370,8 @@ fn value_widget(
                                 .outline()
                                 .small()
                                 .icon(IconName::Folder)
-                                .label("찾아보기")
-                                .tooltip("시스템 폴더 선택기로 디렉터리 찾아보기")
+                                .label(Text::new("찾아보기", "Browse").s())
+                                .tooltip(Text::new("시스템 폴더 선택기로 디렉터리 찾아보기", "Browse for a directory with the system folder picker").s())
                                 .on_click(cx.listener(|_this, _, _, cx| {
                                     cx.spawn(async move |this, cx| {
                                         let result = cx
@@ -2346,7 +2425,7 @@ fn value_widget(
                         .into_any_element()
                 }
                 "command" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
@@ -2362,16 +2441,16 @@ fn value_widget(
                     )
                 }
                 "background-blur" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
                         &current_val,
                         &[
-                            ("끔 (false)", "false"),
-                            ("은은하게 (10)", "10"),
-                            ("기본 (20)", "20"),
-                            ("강하게 (40)", "40"),
+                            (Text::new("끔 (false)", "Off (false)").s(), "false"),
+                            (Text::new("은은하게 (10)", "Subtle (10)").s(), "10"),
+                            (Text::new("기본 (20)", "Default (20)").s(), "20"),
+                            (Text::new("강하게 (40)", "Strong (40)").s(), "40"),
                             ("Glass Regular", "macos-glass-regular"),
                             ("Glass Clear", "macos-glass-clear"),
                         ],
@@ -2380,7 +2459,7 @@ fn value_widget(
                     )
                 }
                 "scrollback-limit" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
@@ -2391,14 +2470,14 @@ fn value_widget(
                             ("100MB", "100000000"),
                             ("500MB", "500000000"),
                             ("1GB", "1000000000"),
-                            ("무제한 (0)", "0"),
+                            (Text::new("무제한 (0)", "Unlimited (0)").s(), "0"),
                         ],
                         cx.entity(),
                         cx,
                     )
                 }
                 "window-padding-x" | "window-padding-y" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
@@ -2416,23 +2495,23 @@ fn value_widget(
                     )
                 }
                 "mouse-scroll-multiplier" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
                         &current_val,
                         &[
-                            ("1x (느림)", "1"),
+                            (Text::new("1x (느림)", "1x (slow)").s(), "1"),
                             ("2x", "2"),
-                            ("3x (기본)", "3"),
-                            ("5x (빠름)", "5"),
+                            (Text::new("3x (기본)", "3x (default)").s(), "3"),
+                            (Text::new("5x (빠름)", "5x (fast)").s(), "5"),
                         ],
                         cx.entity(),
                         cx,
                     )
                 }
                 "adjust-cell-width" | "adjust-cell-height" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
@@ -2451,18 +2530,18 @@ fn value_widget(
                     )
                 }
                 "selection-word-chars" => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     render_input_with_chips(
                         &state,
                         key,
                         &current_val,
-                        &[("기본값 복원", "\\t'\"│`|:;,()[]{}<>$")],
+                        &[(Text::new("기본값 복원", "Restore default").s(), "\\\\t'\\\"│`|:;,()[]{}<>$")],
                         cx.entity(),
                         cx,
                     )
                 }
                 _ => {
-                    let state = this.get_or_create_input(key, opt.hint, window, cx);
+                    let state = this.get_or_create_input(key, opt.hint.s(), window, cx);
                     div()
                         .max_w(px(260.))
                         .child(Input::new(&state).small())
@@ -2540,19 +2619,19 @@ fn value_widget(
                         .xsmall()
                         .icon(if is_keybind { IconName::Keyboard } else { IconName::Pencil })
                         .label(if all.is_empty() {
-                            "항목 추가…".to_string()
+                            Text::new("항목 추가…", "Add item…").s().to_string()
                         } else {
-                            format!("편집 ({}개)", all.len())
+                            Text::new("편집 ({}개)", "Edit ({})").fill(&[&all.len().to_string()])
                         })
                         .on_click(move |_, window, cx| {
                             view.update(cx, |this, cx| {
                                 let items = this.file.get_all(key);
                                 let recorder_focus = cx.focus_handle();
-                                let new_item_input = cx.new(|cx| InputState::new(window, cx).placeholder("새 항목 입력"));
+                                let new_item_input = cx.new(|cx| InputState::new(window, cx).placeholder(Text::new("새 항목 입력", "Enter new item").s()));
                                 let action_select = if is_keybind {
                                     let action_items: Vec<SharedString> = GHOSTTY_ACTIONS
                                         .iter()
-                                        .map(|(act, desc)| format!("{act} · {desc}").into())
+                                        .map(|(act, desc)| format!("{act} · {}", desc.s()).into())
                                         .collect();
                                     let state = cx.new(|cx| {
                                         SelectState::new(
@@ -2632,7 +2711,7 @@ fn value_widget(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("미설정")
+                            .child(Text::new("미설정", "Not set").s())
                             .into_any_element()
                     } else if is_keybind {
                         h_flex()
@@ -2677,7 +2756,7 @@ fn value_widget(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(format!("외 {}개", all.len() - 2)),
+                                        .child(Text::new("외 {}개", "+{} more").fill(&[&(all.len() - 2).to_string()])),
                                 )
                             } else {
                                 None
@@ -2790,6 +2869,38 @@ fn value_widget(
     }
 }
 
+/// Where Ghostty documents one option. The reference page anchors every option
+/// by its own configuration key.
+fn docs_url(key: &str) -> String {
+    format!("https://ghostty.org/docs/config/reference#{key}")
+}
+
+/// Hover card for an option row: what the option does, then a link to the same
+/// option on Ghostty's reference page.
+///
+/// This is a `HoverCard` and not a `Tooltip` because the link has to be
+/// reachable: a tooltip is dismissed as soon as the pointer leaves its trigger,
+/// so nothing inside one can be clicked. The card stays open while the pointer
+/// is inside it. The text keeps a reading measure instead of stretching to a
+/// window-wide line, and `min_w_0` lets the flex item actually shrink to it.
+fn doc_card(doc: &'static str, key: &'static str) -> impl IntoElement {
+    v_flex()
+        .max_w(px(380.))
+        .gap_2()
+        .child(div().min_w_0().whitespace_normal().child(doc))
+        .child(
+            Link::new(format!("opt-doc-link-{key}"))
+                .href(docs_url(key))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(Icon::new(IconName::ExternalLink).xsmall())
+                        .child(Text::new("Ghostty 문서", "Ghostty docs").s()),
+                ),
+        )
+}
+
 fn row(
     this: &mut SettingsView,
     opt: &'static Opt,
@@ -2799,7 +2910,7 @@ fn row(
 ) -> gpui_kit::AnyElement {
     let set = this.is_set(opt);
     let key = opt.key;
-    let doc = opt.doc;
+    let doc = opt.doc.s();
     let opt_id = format!("opt-{key}");
 
     let mut row = h_flex()
@@ -2828,7 +2939,7 @@ fn row(
                     .ghost()
                     .xsmall()
                     .icon(IconName::RotateCcw)
-                    .tooltip("기본값으로 되돌리기")
+                    .tooltip(Text::new("기본값으로 되돌리기", "Reset to default").s())
                     .on_click(move |_, _, cx| {
                         view.update(cx, |this, cx| this.reset_key(key2, cx));
                     }),
@@ -2838,48 +2949,53 @@ fn row(
     };
 
     row.child(
-        v_flex()
-            .id(opt_id)
-            .w(px(240.))
-            .flex_none()
-            .gap_0()
-            .tooltip(move |window, cx| Tooltip::new(doc).build(window, cx))
-            .child(
-                h_flex()
-                    .gap_1p5()
-                    .items_center()
+        HoverCard::new(format!("opt-doc-{key}"))
+            .anchor(Anchor::TopLeft)
+            .open_delay(Duration::from_millis(400))
+            .trigger(
+                v_flex()
+                    .id(opt_id)
+                    .w(px(240.))
+                    .flex_none()
+                    .gap_0()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_medium()
+                                    .text_color(cx.theme().foreground)
+                                    .child(opt.label.s()),
+                            )
+                            .children(if !opt.platform.is_empty() {
+                                Some(
+                                    div()
+                                        .text_xs()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_md()
+                                        .bg(cx.theme().muted)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .font_family("Menlo")
+                                        .child(opt.platform),
+                                )
+                            } else {
+                                None
+                            }),
+                    )
                     .child(
                         div()
-                            .text_sm()
-                            .font_medium()
-                            .text_color(cx.theme().foreground)
-                            .child(opt.label),
-                    )
-                    .children(if !opt.platform.is_empty() {
-                        Some(
-                            div()
-                                .text_xs()
-                                .px_1p5()
-                                .py(px(1.))
-                                .rounded_md()
-                                .bg(cx.theme().muted)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .text_color(cx.theme().muted_foreground)
-                                .font_family("Menlo")
-                                .child(opt.platform),
-                        )
-                    } else {
-                        None
-                    }),
+                            .text_xs()
+                            .font_family("Menlo")
+                            .text_color(cx.theme().muted_foreground)
+                            .child(key),
+                    ),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .font_family("Menlo")
-                    .text_color(cx.theme().muted_foreground)
-                    .child(key),
-            ),
+            .content(move |_, _, _| doc_card(doc, key)),
     )
     .child(
         div()
@@ -2908,7 +3024,7 @@ fn row(
                     .items_center()
                     .gap_1()
                     .child(div().size(px(5.)).rounded_full().bg(cx.theme().primary))
-                    .child("설정됨")
+                    .child(Text::new("설정됨", "Set").s())
                     .into_any_element()
             } else {
                 div()
@@ -2916,7 +3032,7 @@ fn row(
                     .py(px(2.))
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("기본값")
+                    .child(Text::new("기본값", "Default").s())
                     .into_any_element()
             }),
     )
@@ -2972,7 +3088,7 @@ impl Render for SettingsView {
                                     .text_xs()
                                     .font_medium()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("설정"),
+                                    .child(Text::new("설정", "Settings").s()),
                             ),
                     )
                     .child(
@@ -3005,11 +3121,26 @@ impl Render for SettingsView {
                     .gap_2()
                     .items_center()
                     .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(
+                                Icon::new(IconName::Languages)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            // Sized for the longest language name in
+                            // `Lang::ALL` plus the caret; revisit when a
+                            // longer native name joins the picker.
+                            .child(div().w(px(108.)).child(Select::new(&self.lang_select).small())),
+                    )
+                    .child(div().w(px(1.)).h(px(18.)).bg(cx.theme().border))
+                    .child(
                         Button::new("reload")
                             .ghost()
                             .small()
                             .icon(IconName::RefreshCw)
-                            .tooltip("파일 다시 불러오기")
+                            .tooltip(Text::new("파일 다시 불러오기", "Reload file").s())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.revert(cx);
                             })),
@@ -3019,7 +3150,7 @@ impl Render for SettingsView {
                             Button::new("revert")
                                 .outline()
                                 .small()
-                                .label("변경 취소")
+                                .label(Text::new("변경 취소", "Discard changes").s())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.revert(cx);
                                 }))
@@ -3027,7 +3158,7 @@ impl Render for SettingsView {
                             Button::new("revert")
                                 .ghost()
                                 .small()
-                                .label("변경 취소")
+                                .label(Text::new("변경 취소", "Discard changes").s())
                                 .disabled(true)
                         },
                     )
@@ -3037,7 +3168,7 @@ impl Render for SettingsView {
                                 .outline()
                                 .small()
                                 .icon(IconName::FileText)
-                                .label("변경 미리보기")
+                                .label(Text::new("변경 미리보기", "Review changes").s())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.active_modal = Some(ActiveModal::DiffViewer);
                                     cx.notify();
@@ -3047,7 +3178,7 @@ impl Render for SettingsView {
                                 .ghost()
                                 .small()
                                 .icon(IconName::FileText)
-                                .label("변경 미리보기")
+                                .label(Text::new("변경 미리보기", "Review changes").s())
                                 .disabled(true)
                         },
                     )
@@ -3057,7 +3188,7 @@ impl Render for SettingsView {
                                 .primary()
                                 .small()
                                 .icon(IconName::Check)
-                                .label("저장")
+                                .label(Text::new("저장", "Save").s())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.save(cx);
                                 }))
@@ -3066,7 +3197,7 @@ impl Render for SettingsView {
                                 .outline()
                                 .small()
                                 .icon(IconName::Check)
-                                .label("저장됨")
+                                .label(Text::new("저장됨", "Saved").s())
                                 .disabled(true)
                         },
                     )
@@ -3075,7 +3206,7 @@ impl Render for SettingsView {
                             .outline()
                             .small()
                             .icon(IconName::PanelRight)
-                            .label(if self.show_preview { "미리보기 닫기" } else { "미리보기" })
+                            .label(if self.show_preview { Text::new("미리보기 닫기", "Close preview").s() } else { Text::new("미리보기", "Preview").s() })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_preview = !this.show_preview;
                                 cx.notify();
@@ -3092,7 +3223,7 @@ impl Render for SettingsView {
                 .count();
             let selected = self.search.is_empty() && i == self.category;
             let view = view.clone();
-            SidebarMenuItem::new(cat.label)
+            SidebarMenuItem::new(cat.label.s())
                 .icon(category_icon(i))
                 .active(selected)
                 .suffix(move |_, cx| {
@@ -3131,11 +3262,12 @@ impl Render for SettingsView {
 
         let heading = if self.search.is_empty() {
             let cat = &CATEGORIES[self.category];
-            (cat.label.to_string(), cat.desc.to_string(), Some(category_icon(self.category)))
+(cat.label.s().to_string(), cat.desc.s().to_string(), Some(category_icon(self.category)))
         } else {
             (
-                format!("검색 결과 ({}개)", self.visible_opts().len()),
-                "키, 이름, 설명에서 일치하는 옵션입니다.".to_string(),
+                Text::new("검색 결과 ({}개)", "Search results ({})")
+                    .fill(&[&self.visible_opts().len().to_string()]),
+                Text::new("키, 이름, 설명에서 일치하는 옵션입니다.", "Options that match by key, name, or description.").s().to_string(),
                 Some(IconName::Search),
             )
         };
@@ -3205,7 +3337,12 @@ impl Render for SettingsView {
                             .text_xs()
                             .font_medium()
                             .text_color(cx.theme().foreground)
-                            .child(format!("{}/{} 설정됨", self.set_count(), self.visible_opts().len())),
+                            .child(
+                                Text::new("{}/{} 설정됨", "{}/{} set").fill(&[
+                                    &self.set_count().to_string(),
+                                    &self.visible_opts().len().to_string(),
+                                ]),
+                            ),
                     ),
             );
 
@@ -3232,20 +3369,20 @@ impl Render for SettingsView {
                         .text_sm()
                         .font_medium()
                         .text_color(cx.theme().foreground)
-                        .child("일치하는 옵션이 없습니다"),
+                        .child(Text::new("일치하는 옵션이 없습니다", "No matching options").s()),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("다른 키워드로 검색하거나 검색어를 지워보세요."),
+                        .child(Text::new("다른 키워드로 검색하거나 검색어를 지워보세요.", "Try a different keyword or clear the search.").s()),
                 )
                 .child(
                     Button::new("clear-search")
                         .outline()
                         .small()
                         .icon(IconName::X)
-                        .label("검색어 지우기")
+                        .label(Text::new("검색어 지우기", "Clear search").s())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.clear_search(window, cx);
                         })),
@@ -3278,7 +3415,7 @@ impl Render for SettingsView {
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("옵션"),
+                                .child(Text::new("옵션", "Option").s()),
                         )
                         .child(
                             div()
@@ -3287,7 +3424,7 @@ impl Render for SettingsView {
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("값"),
+                                .child(Text::new("값", "Value").s()),
                         )
                         .child(
                             div()
@@ -3299,7 +3436,7 @@ impl Render for SettingsView {
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("상태"),
+                                .child(Text::new("상태", "State").s()),
                         )
                         .child(div().w(px(36.)).flex_none()),
                 )
@@ -3405,7 +3542,7 @@ impl Render for SettingsView {
                                         .font_family("Menlo")
                                         .child("/"),
                                 )
-                                .child("검색 포커스"),
+                                .child(Text::new("검색 포커스", "Focus search").s()),
                         )
                         .child(
                             h_flex()
@@ -3423,7 +3560,7 @@ impl Render for SettingsView {
                                         .font_family("Menlo")
                                         .child("⌘S"),
                                 )
-                                .child("저장"),
+                                .child(Text::new("저장", "Save").s()),
                         )
                 },
             )
@@ -3444,9 +3581,9 @@ impl Render for SettingsView {
                             }),
                     )
                     .child(if dirty {
-                        "저장되지 않은 변경사항"
+                        Text::new("저장되지 않은 변경사항", "Unsaved changes").s()
                     } else {
-                        "동기화됨"
+                        Text::new("동기화됨", "Synced").s()
                     }),
             );
 
@@ -3545,10 +3682,55 @@ mod tests {
 
     #[test]
     fn test_action_description() {
+        let restore = i18n::current();
+
+        i18n::set(Lang::Ko);
         assert_eq!(action_description("copy_to_clipboard"), Some("클립보드에 복사"));
         assert_eq!(action_description("new_tab"), Some("새 탭 열기"));
         assert_eq!(action_description("increase_font_size:1"), Some("글꼴 크기 확대 (+1)"));
         assert_eq!(action_description("unknown_action_xyz"), None);
+
+        // The same table answers in English without being rebuilt.
+        i18n::set(Lang::En);
+        assert_eq!(action_description("copy_to_clipboard"), Some("Copy to clipboard"));
+        assert_eq!(action_description("new_tab"), Some("Open new tab"));
+        assert_eq!(action_description("increase_font_size:1"), Some("Increase font size (+1)"));
+        assert_eq!(action_description("unknown_action_xyz"), None);
+
+        i18n::set(restore);
+    }
+
+    /// Every row links to the option's own anchor on Ghostty's reference page,
+    /// so a key that is not a clean URL fragment would produce a dead link.
+    #[test]
+    fn docs_url_anchors_every_option_key() {
+        assert_eq!(
+            docs_url("adjust-strikethrough-position"),
+            "https://ghostty.org/docs/config/reference#adjust-strikethrough-position"
+        );
+        for opt in crate::config::schema::OPTS {
+            assert!(
+                opt.key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{} is not a usable anchor fragment",
+                opt.key
+            );
+        }
+    }
+
+    /// The whole point of the switch: one view renders two sets of copy.
+    #[test]
+    fn test_option_labels_follow_the_language() {
+        let restore = i18n::current();
+        let font = lookup("font-family").expect("font-family is in the schema");
+
+        i18n::set(Lang::Ko);
+        assert_eq!(font.label.s(), "글꼴");
+        i18n::set(Lang::En);
+        assert_eq!(font.label.s(), "Font");
+
+        i18n::set(restore);
     }
 
     #[test]
