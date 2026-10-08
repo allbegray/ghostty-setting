@@ -1,0 +1,55 @@
+name: release
+
+# Tag a commit and the binary is built and attached to a GitHub release:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# install.sh looks for `ghostty-setting-<target>` on the latest release, so the
+# asset names here and the names it asks for must stay in step.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon builds on the arm64 runner.
+          - target: aarch64-apple-darwin
+          # Intel builds from the same runner: the macOS SDK is universal, so
+          # adding the target is enough.
+          - target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: stage the asset
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/ghostty-setting" \
+             "dist/ghostty-setting-${{ matrix.target }}"
+
+      - name: attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

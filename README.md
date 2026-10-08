@@ -19,9 +19,25 @@ options, grouped into nine categories, with a live terminal preview beside the l
 - **Worth reading before you trust it.** Every option row links to its own anchor on
   Ghostty's [configuration reference](https://ghostty.org/docs/config/reference).
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/allbegray/ghostty-setting/main/install.sh | sh
+```
+
+Takes the prebuilt binary for your Mac from the latest release and puts it in
+`~/.local/bin`. If there is no prebuilt binary for your machine, the script
+builds from source with cargo instead — so Rust is only needed in that case.
+
+With Rust installed, either path works on its own:
+
+```sh
+cargo install --git https://github.com/allbegray/ghostty-setting --locked
+```
+
 ## Build and run
 
-Requires a recent stable Rust toolchain.
+From a checkout, with a recent stable Rust toolchain:
 
 ```sh
 cargo run                       # opens the config this machine would use
