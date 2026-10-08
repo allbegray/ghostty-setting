@@ -7,6 +7,7 @@
 //! only way to check them was to look at the panel.
 
 use super::*;
+use super::commit::Reported;
 
 /// What the preview draws for a file with nothing set.
 ///
@@ -458,7 +459,7 @@ impl SettingsView {
                             .child(name)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.commit("theme", Some(name), Kept::Nothing, cx);
+                                    this.commit("theme", Reported::Chosen { slot: Kept::Nothing, value: name.to_string() }, cx);
                                 });
                             })
                     })),
@@ -502,7 +503,7 @@ impl SettingsView {
                             .child(font)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.commit("font-family", Some(font), Kept::Nothing, cx);
+                                    this.commit("font-family", Reported::Chosen { slot: Kept::Nothing, value: font.to_string() }, cx);
                                 });
                             })
                     })),

@@ -51,6 +51,7 @@ use gpui_kit::{
 use gpui_kit::base::Disableable as _;
 
 mod chrome;
+mod commit;
 mod controls;
 mod diff_modal;
 mod editor;
@@ -61,6 +62,7 @@ mod preview;
 mod query;
 mod value;
 
+use commit::{Decision, Reported};
 use editors::{EditorCache, Kept};
 
 use crate::config::linefile::LineFile;
@@ -600,28 +602,31 @@ impl SettingsView {
 
     /// The one path that changes an option's value.
     ///
-    /// `value` is the new value, or `None` to clear the key. `kept` names the
-    /// editor that produced the change, so the cache can leave it standing
-    /// while the editors that would show a stale value are dropped. No call
-    /// site has to know which of the four caches holds its key.
-    fn commit(
+    /// A control reports what happened; the [`commit`] module says which file
+    /// edit follows and which slot drew it, so no call site spells the
+    /// empty-means-removes rule or guesses a `Kept`. No call site has to know
+    /// which of the four caches holds its key.
+    fn commit(&mut self, key: &'static str, report: Reported, cx: &mut Context<Self>) {
+        let decision = commit::decide(report);
+        decision.edit.apply(key, &mut self.file);
+        self.settle(key, decision.kept, cx);
+    }
+
+    /// Commit a decision the caller already holds, for the controls that are
+    /// stateless or speak in whole lists.
+    fn commit_decision(
         &mut self,
         key: &'static str,
-        value: Option<&str>,
-        kept: Kept,
+        decision: Decision,
         cx: &mut Context<Self>,
     ) {
-        match value {
-            Some(value) => self.file.set(key, value),
-            None => self.file.remove(key),
-        }
-        self.settle(key, kept, cx);
+        decision.edit.apply(key, &mut self.file);
+        self.settle(key, decision.kept, cx);
     }
 
     /// Replace every value of a repeatable option.
     fn commit_all(&mut self, key: &'static str, values: &[String], cx: &mut Context<Self>) {
-        self.file.set_all(key, values);
-        self.settle(key, Kept::Nothing, cx);
+        self.commit_decision(key, commit::list(values), cx);
     }
 
     /// Drop the editors that would show a stale value, then re-render.
@@ -632,7 +637,7 @@ impl SettingsView {
     }
 
     fn reset_key(&mut self, key: &'static str, cx: &mut Context<Self>) {
-        self.commit(key, None, Kept::Nothing, cx);
+        self.commit_decision(key, commit::cleared(), cx);
     }
 
     fn visible_opts(&self) -> Vec<&'static Opt> {

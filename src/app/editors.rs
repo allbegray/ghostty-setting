@@ -28,6 +28,7 @@ use gpui_kit::component::{
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Window};
 
 use super::SettingsView;
+use crate::app::commit::Reported;
 use crate::app::value;
 
 /// One of the four editor kinds the cache retains.
@@ -119,12 +120,7 @@ impl EditorCache {
         let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 let value = state.read(cx).value().trim().to_string();
-                let value = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.as_str())
-                };
-                this.commit(key, value, Kept::Input, cx);
+                this.commit(key, Reported::Typed(value), cx);
             }
         });
         self.inputs.insert(
@@ -165,12 +161,7 @@ impl EditorCache {
         let subscription = cx.subscribe_in(&editor, window, move |this, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 let value = state.read(cx).value().trim().to_string();
-                let value = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.as_str())
-                };
-                this.commit(key, value, Kept::Input, cx);
+                this.commit(key, Reported::Typed(value), cx);
             }
         });
         self.inputs.insert(
@@ -200,7 +191,9 @@ impl EditorCache {
         let editor = cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx));
         let subscription = cx.subscribe(&editor, move |this, _, event, cx| {
             let SelectEvent::Confirm(value) = event;
-            this.commit(key, value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
+            if let Some(value) = value {
+                this.commit(key, Reported::Chosen { slot: Kept::Select, value: value.to_string() }, cx);
+            }
         });
         self.selects.insert(
             key,
@@ -235,7 +228,7 @@ impl EditorCache {
         });
         let subscription = cx.subscribe(&editor, move |this, _, event, cx| {
             if let ColorPickerEvent::Change(Some(color)) = event {
-                this.commit(key, Some(&value::hex(*color)), Kept::Color, cx);
+                this.commit(key, Reported::Chosen { slot: Kept::Color, value: value::hex(*color) }, cx);
             }
         });
         self.colors.insert(
@@ -282,7 +275,7 @@ impl EditorCache {
             } else {
                 format!("{}", val.start().round() as i64)
             };
-            this.commit(key, Some(&new_val), Kept::Slider, cx);
+            this.commit(key, Reported::Chosen { slot: Kept::Slider, value: new_val }, cx);
         });
         self.sliders.insert(
             key,

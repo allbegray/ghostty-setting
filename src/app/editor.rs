@@ -5,6 +5,7 @@
 //! knows only the option, the view and the window.
 
 use super::*;
+use super::commit::Reported;
 use super::controls::{self, Slider as SliderPolicy};
 use super::list_editor::ListEditorModal;
 use super::list_items::ListItems;
@@ -103,7 +104,7 @@ fn render_chips_only(
                 .child(label.s())
                 .on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| {
-                        this.commit(key, Some(&target_str), Kept::Nothing, cx);
+                        this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() }, cx);
                     });
                 })
         }))
@@ -155,7 +156,7 @@ fn render_input_with_chips(
                         .child(label.s())
                         .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
-                                this.commit(key, Some(&target_str), Kept::Nothing, cx);
+                                this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() }, cx);
                             });
                         })
                 }))
@@ -179,7 +180,7 @@ pub(super) fn value_editor(
                 .on_change(move |&value, _, cx| {
                     view.update(cx, |this, cx| {
                         let value = if value { "true" } else { "false" };
-                        this.commit(key, Some(value), Kept::Nothing, cx);
+                        this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: value.to_string() }, cx);
                     });
                 })
                 .into_any_element()
@@ -255,8 +256,7 @@ pub(super) fn value_editor(
                                             if let Some(path) = result {
                                                 this.commit(
                                                     "working-directory",
-                                                    Some(&path),
-                                                    Kept::Nothing,
+                                                    Reported::Chosen { slot: Kept::Nothing, value: path },
                                                     cx,
                                                 );
                                             }
@@ -568,8 +568,10 @@ pub(super) fn value_editor(
                                 } else {
                                     new_flags.push(flag.to_string());
                                 }
-                                let value = value::flags_value(&new_flags);
-                                this.commit(key, value.as_deref(), Kept::Nothing, cx);
+                                match value::flags_value(&new_flags) {
+                                    Some(value) => this.commit(key, Reported::Chosen { slot: Kept::Nothing, value }, cx),
+                                    None => this.commit(key, Reported::Cleared, cx),
+                                }
                             });
                         })
                 }))
