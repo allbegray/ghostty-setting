@@ -5,6 +5,8 @@
 //! knows only the option, the view and the window.
 
 use super::*;
+use super::list_editor::ListEditorModal;
+use super::list_items::ListItems;
 use crate::app::value::{self, Stored};
 
 fn render_bounded_slider_number(
@@ -576,8 +578,8 @@ pub(super) fn value_editor(
                                         let SelectEvent::Confirm(value) = event;
                                         if let Some(val) = value {
                                             let act = val.split(" · ").next().unwrap_or(val.as_ref()).to_string();
-                                            if let Some(ActiveModal::ListEditor { selected_action, .. }) = &mut this.active_modal {
-                                                *selected_action = act;
+                                            if let Some(modal) = this.list_editor() {
+                                                modal.selected_action = act;
                                                 cx.notify();
                                             }
                                         }
@@ -601,8 +603,8 @@ pub(super) fn value_editor(
                                     cx.subscribe(&state, |this, _, event, cx| {
                                         let SelectEvent::Confirm(value) = event;
                                         if let Some(val) = value {
-                                            if let Some(ActiveModal::ListEditor { selected_font, .. }) = &mut this.active_modal {
-                                                *selected_font = val.to_string();
+                                            if let Some(modal) = this.list_editor() {
+                                                modal.selected_font = val.to_string();
                                                 cx.notify();
                                             }
                                         }
@@ -621,7 +623,7 @@ pub(super) fn value_editor(
                                 } else {
                                     String::new()
                                 };
-                                this.active_modal = Some(ActiveModal::ListEditor {
+                                this.active_modal = Some(ActiveModal::ListEditor(ListEditorModal {
                                     key,
                                     items: ListItems::from_values(items),
                                     recorded_trigger: String::new(),
@@ -632,7 +634,7 @@ pub(super) fn value_editor(
                                     is_recording: false,
                                     recorder_focus,
                                     new_item_input,
-                                });
+                                }));
                                 cx.notify();
                             });
                         }),

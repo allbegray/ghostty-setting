@@ -61,7 +61,6 @@ mod query;
 mod value;
 
 use editors::{EditorCache, Kept};
-use list_items::ListItems;
 
 use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
@@ -433,19 +432,22 @@ const POPULAR_FONTS: &[&str] = &[
 ];
 
 pub enum ActiveModal {
-    ListEditor {
-        key: &'static str,
-        items: ListItems,
-        recorded_trigger: String,
-        selected_action: String,
-        action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-        font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-        selected_font: String,
-        is_recording: bool,
-        recorder_focus: FocusHandle,
-        new_item_input: Entity<InputState>,
-    },
+    /// The list editor owns its own state (see `list_editor::ListEditorModal`).
+    ListEditor(list_editor::ListEditorModal),
     DiffViewer,
+}
+
+impl SettingsView {
+    /// The list editor, when it is the open modal.
+    ///
+    /// Every handler that changes the modal's state goes through here, so the
+    /// reach-in pattern has one shape and one place to change.
+    fn list_editor(&mut self) -> Option<&mut list_editor::ListEditorModal> {
+        match &mut self.active_modal {
+            Some(ActiveModal::ListEditor(modal)) => Some(modal),
+            _ => None,
+        }
+    }
 }
 
 pub struct SettingsView {
@@ -823,30 +825,7 @@ impl Render for SettingsView {
         let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
 
         let modal_overlay = match &self.active_modal {
-            Some(ActiveModal::ListEditor {
-                key,
-                items,
-                recorded_trigger,
-                selected_action,
-                action_select,
-                font_select,
-                selected_font,
-                is_recording,
-                recorder_focus,
-                new_item_input,
-            }) => Some(self.render_list_editor_modal(
-                key,
-                items.as_slice(),
-                recorded_trigger,
-                selected_action,
-                action_select.as_ref(),
-                font_select.as_ref(),
-                selected_font.as_str(),
-                *is_recording,
-                recorder_focus,
-                new_item_input,
-                cx,
-            )),
+            Some(ActiveModal::ListEditor(modal)) => Some(self.render_list_editor_modal(modal, cx)),
             Some(ActiveModal::DiffViewer) => Some(self.render_diff_modal(cx)),
             None => None,
         };
