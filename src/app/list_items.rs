@@ -13,12 +13,13 @@
 /// know is in the operations: a blank or whitespace-only value is not an item,
 /// and whether a value the list already holds may be added is the caller's
 /// choice — `add` allows it, `add_unique` refuses it.
-#[derive(Default, Clone, Debug, PartialEq)]
-pub struct ListItems(Vec<String>);
+#[derive(Default, Debug)]
+pub(crate) struct ListItems(Vec<String>);
 
 impl ListItems {
-    /// An empty list.
-    pub fn new() -> Self {
+    /// An empty list, for a test that builds one up.
+    #[cfg(test)]
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -29,11 +30,10 @@ impl ListItems {
 
     /// Add a value: trimmed, and skipped when the result is blank. Reports
     /// whether the list took it.
-    pub fn add(&mut self, value: &str) -> bool {
-        let value = value.trim();
-        if value.is_empty() {
+    pub(crate) fn add(&mut self, value: &str) -> bool {
+        let Some(value) = Self::item(value) else {
             return false;
-        }
+        };
         self.0.push(value.to_string());
         true
     }
@@ -41,34 +41,44 @@ impl ListItems {
     /// Add a value the list does not already hold: trimmed, skipped when blank,
     /// and refused when an equal item is present. Reports whether the list
     /// took it.
-    pub fn add_unique(&mut self, value: &str) -> bool {
-        let value = value.trim();
-        if value.is_empty() || self.0.iter().any(|item| item == value) {
+    pub(crate) fn add_unique(&mut self, value: &str) -> bool {
+        let Some(value) = Self::item(value) else {
+            return false;
+        };
+        if self.0.iter().any(|item| item == value) {
             return false;
         }
         self.0.push(value.to_string());
         true
     }
 
+    /// A trimmed value, or none when the value is blank — a blank is not an
+    /// item. The one place that rule lives; both add paths share it.
+    fn item(value: &str) -> Option<&str> {
+        let value = value.trim();
+        (!value.is_empty()).then_some(value)
+    }
+
     /// Remove the item at `ix`, if there is one.
-    pub fn remove_at(&mut self, ix: usize) {
+    pub(crate) fn remove_at(&mut self, ix: usize) {
         if ix < self.0.len() {
             self.0.remove(ix);
         }
     }
 
     /// The items, in order.
-    pub fn as_slice(&self) -> &[String] {
+    pub(crate) fn as_slice(&self) -> &[String] {
         &self.0
     }
 
     /// Whether the list holds no items.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// How many items the list holds.
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 }

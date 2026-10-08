@@ -1,11 +1,11 @@
 //! The modal that edits a repeatable option's list.
 //!
 //! One option key drives five different editors — a plain list, a font list, a
-//! key-binding recorder, an OpenType feature list and the extra config files —
-//! through four booleans that are re-tested at twenty-six sites. The modal is
-//! the only part of the view that touches `active_modal`, so it lives behind
-//! that seam: the list arithmetic, the recorder and the quick-add chips are its
-//! implementation.
+//! key-binding recorder, an OpenType feature list and the extra config files.
+//! The shape is derived once from the key into [`ListKind`], and every arm
+//! reads that one value instead of re-testing which key it holds. The list's
+//! own rules live in [`super::list_items`]; the modal's state is
+//! [`ListEditorModal`], reached through the view's `list_editor` accessor.
 
 use super::*;
 use super::list_items::ListItems;
@@ -16,21 +16,21 @@ use super::list_items::ListItems;
 /// the renderer takes one of these, the open site constructs one, and the
 /// handlers reach in through the view's accessor. `items` carries its own
 /// rules (see [`super::list_items`]).
-pub(super) struct ListEditorModal {
-    pub(super) key: &'static str,
-    pub(super) items: ListItems,
-    pub(super) recorded_trigger: String,
-    pub(super) selected_action: String,
-    pub(super) action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-    pub(super) font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
-    pub(super) selected_font: String,
-    pub(super) is_recording: bool,
-    pub(super) recorder_focus: FocusHandle,
-    pub(super) new_item_input: Entity<InputState>,
+pub(crate) struct ListEditorModal {
+    pub(crate) key: &'static str,
+    pub(crate) items: ListItems,
+    pub(crate) recorded_trigger: String,
+    pub(crate) selected_action: String,
+    pub(crate) action_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    pub(crate) font_select: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    pub(crate) selected_font: String,
+    pub(crate) is_recording: bool,
+    pub(crate) recorder_focus: FocusHandle,
+    pub(crate) new_item_input: Entity<InputState>,
 }
 
 /// Which list a key holds, derived once from the key.
-pub(super) enum ListKind {
+pub(crate) enum ListKind {
     Plain,
     Font,
     Keybind,
@@ -40,7 +40,7 @@ pub(super) enum ListKind {
 
 impl ListKind {
     /// The shape a key's list editor takes.
-    pub(super) fn of(key: &str) -> Self {
+    pub(crate) fn of(key: &str) -> Self {
         match key {
             "keybind" => ListKind::Keybind,
             "font-family" => ListKind::Font,
@@ -281,8 +281,7 @@ impl SettingsView {
                 }
             );
 
-        let add_section = match kind {
-            ListKind::Keybind => {
+        let add_section = if matches!(kind, ListKind::Keybind) {
             let trigger_val = recorded_trigger.to_string();
             let act_val = selected_action.to_string();
             let is_rec = is_recording;
@@ -451,8 +450,7 @@ impl SettingsView {
                         )
                 )
                 .into_any_element()
-        }
-        ListKind::Font => {
+        } else if matches!(kind, ListKind::Font) {
             let sel_font = selected_font.to_string();
             let view = view.clone();
             v_flex()
@@ -532,8 +530,7 @@ impl SettingsView {
                         )
                 )
                 .into_any_element()
-        }
-        ListKind::Config => {
+        } else if matches!(kind, ListKind::Config) {
             h_flex()
                 .gap_2()
                 .items_center()
@@ -585,8 +582,7 @@ impl SettingsView {
                         }))
                 )
                 .into_any_element()
-        }
-        ListKind::Feature => {
+        } else if matches!(kind, ListKind::Feature) {
             const POPULAR_FEATURES: &[(&str, Text)] = &[
                 ("-calt", Text::new("합자 끄기", "Ligatures off")),
                 ("+calt", Text::new("합자 켜기", "Ligatures on")),
@@ -672,8 +668,7 @@ impl SettingsView {
                         )
                 )
                 .into_any_element()
-        }
-        ListKind::Plain => {
+        } else {
             h_flex()
                 .gap_2()
                 .items_center()
@@ -701,7 +696,6 @@ impl SettingsView {
                         }))
                 )
                 .into_any_element()
-            }
         };
 
         let footer = h_flex()
