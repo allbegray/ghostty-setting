@@ -25,30 +25,12 @@ impl Lang {
     /// Every supported language, in switcher order.
     pub const ALL: &'static [Lang] = &[Lang::Ko, Lang::En];
 
-    /// Language code, also the form accepted by [`Lang::from_code`].
-    pub fn code(self) -> &'static str {
-        match self {
-            Lang::Ko => "ko",
-            Lang::En => "en",
-        }
-    }
-
     /// The language's name in that language, for the switcher.
     pub fn native_label(self) -> &'static str {
         match self {
             Lang::Ko => "한국어",
             Lang::En => "English",
         }
-    }
-
-    /// Parse a language tag such as `en`, `en-US`, or `ko_KR`.
-    pub fn from_code(code: &str) -> Option<Lang> {
-        let base = code
-            .split(['-', '_'])
-            .next()
-            .unwrap_or(code)
-            .to_ascii_lowercase();
-        Lang::ALL.iter().copied().find(|l| l.code() == base)
     }
 
     /// Parse the name the language picker displays.
@@ -159,16 +141,6 @@ mod tests {
         set(Lang::En);
         assert_eq!(Text::new("편집 ({}개)", "Edit ({})").fill(&["3"]), "Edit (3)");
         set(Lang::Ko);
-    }
-
-    #[test]
-    fn lang_codes_round_trip() {
-        for lang in Lang::ALL {
-            assert_eq!(Lang::from_code(lang.code()), Some(*lang));
-        }
-        assert_eq!(Lang::from_code("en-US"), Some(Lang::En));
-        assert_eq!(Lang::from_code("ko_KR"), Some(Lang::Ko));
-        assert_eq!(Lang::from_code("de"), None);
     }
 
     /// The picker hands back its item's display text, so that text must map

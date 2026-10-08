@@ -15,7 +15,6 @@
 //! - Option label column includes platform badge and full `opt.doc` tooltip.
 //! - 4-lane aligned layout (option, value, state, reset action).
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, TitleBar,
     IndexPath,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPicker, ColorPickerEvent},
     h_flex,
     hover_card::HoverCard,
     link::Link,
@@ -35,7 +34,7 @@ use gpui_kit::component::{
     select::{Select, SelectEvent, SelectState},
     searchable_list::SearchableVec,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
-    slider::{Slider, SliderEvent, SliderState},
+    slider::{Slider, SliderEvent},
     status_bar::StatusBar,
     switch::Switch,
     tooltip::Tooltip,
@@ -49,6 +48,10 @@ use gpui_kit::{
     div, px,
 };
 use gpui_kit::base::Disableable as _;
+
+mod editors;
+
+use editors::{EditorCache, Kept};
 
 use crate::config::linefile::LineFile;
 use crate::config::schema::{CATEGORIES, Kind, Opt, lookup};
@@ -498,16 +501,12 @@ pub struct SettingsView {
     search: String,
     search_input: Entity<InputState>,
     notice: Option<String>,
-    /// Per-row retained component state, created lazily on first render.
-    /// Values held here are the editing surface; the file is only written
-    /// once the row's subscription has both the key and the new text.
-    text_inputs: HashMap<&'static str, Entity<InputState>>,
-    /// Interface-language picker. Kept out of `selects` because it must
-    /// survive the widget reset that a language switch performs.
+    /// Per-row editors, created lazily on first render. What they hold is the
+    /// editing surface; the file stays the source of truth.
+    editors: EditorCache,
+    /// Interface-language picker. Kept out of the cache because it must
+    /// survive the editor reset that a language switch performs.
     lang_select: Entity<SelectState<SearchableVec<SharedString>>>,
-    selects: HashMap<&'static str, Entity<SelectState<SearchableVec<SharedString>>>>,
-    colors: HashMap<&'static str, Entity<ColorPickerState>>,
-    sliders: HashMap<&'static str, Entity<SliderState>>,
     _subscriptions: Vec<Subscription>,
     active_modal: Option<ActiveModal>,
     show_preview: bool,
@@ -555,11 +554,8 @@ impl SettingsView {
             search: String::new(),
             search_input,
             notice: None,
-            text_inputs: HashMap::new(),
+            editors: EditorCache::default(),
             lang_select,
-            selects: HashMap::new(),
-            colors: HashMap::new(),
-            sliders: HashMap::new(),
             _subscriptions: vec![subscription, lang_subscription],
             active_modal: None,
             show_preview: true,
@@ -578,7 +574,7 @@ impl SettingsView {
             return;
         }
         i18n::set(lang);
-        self.text_inputs.clear();
+        self.editors.forget_inputs();
         self.search_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(Text::new("옵션 검색  ( / )", "Search options ( / )").s())
@@ -632,11 +628,8 @@ impl SettingsView {
         self.file = LineFile::parse(&text);
         self.original = text;
         self.notice = Some(Text::new("파일 내용을 다시 불러왔습니다.", "File reloaded.").s().to_string());
-        // Row states mirror the file, so drop them and let render rebuild.
-        self.text_inputs.clear();
-        self.selects.clear();
-        self.colors.clear();
-        self.sliders.clear();
+        // Row editors mirror the file, so drop them and let render rebuild.
+        self.editors.forget_all();
         self.active_modal = None;
         cx.notify();
     }
@@ -669,14 +662,41 @@ impl SettingsView {
         }
     }
 
-    fn reset_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        self.file.remove(key);
-        self.text_inputs.remove(key);
-        self.selects.remove(key);
-        self.colors.remove(key);
-        self.sliders.remove(key);
+    /// The one path that changes an option's value.
+    ///
+    /// `value` is the new value, or `None` to clear the key. `kept` names the
+    /// editor that produced the change, so the cache can leave it standing
+    /// while the editors that would show a stale value are dropped. No call
+    /// site has to know which of the four caches holds its key.
+    fn commit(
+        &mut self,
+        key: &'static str,
+        value: Option<&str>,
+        kept: Kept,
+        cx: &mut Context<Self>,
+    ) {
+        match value {
+            Some(value) => self.file.set(key, value),
+            None => self.file.remove(key),
+        }
+        self.settle(key, kept, cx);
+    }
+
+    /// Replace every value of a repeatable option.
+    fn commit_all(&mut self, key: &'static str, values: &[String], cx: &mut Context<Self>) {
+        self.file.set_all(key, values);
+        self.settle(key, Kept::Nothing, cx);
+    }
+
+    /// Drop the editors that would show a stale value, then re-render.
+    fn settle(&mut self, key: &'static str, kept: Kept, cx: &mut Context<Self>) {
+        self.editors.invalidate(key, kept);
         self.notice = None;
         cx.notify();
+    }
+
+    fn reset_key(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        self.commit(key, None, Kept::Nothing, cx);
     }
 
     fn visible_opts(&self) -> Vec<&'static Opt> {
@@ -717,30 +737,20 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        if !self.text_inputs.contains_key(key) {
-            let seed = self.file.get(key).unwrap_or_default();
-            let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(placeholder)
-                    .default_value(seed)
-            });
+        let seed = self.file.get(key).unwrap_or_default();
+        let placeholder = if !hint.is_empty() { hint } else { Text::new("값 입력", "Enter value").s() };
+        let (state, created) = self.editors.input(key, &seed, placeholder, window, cx);
+        if created {
             let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    let v = state.read(cx).value().to_string();
-                    if v.trim().is_empty() {
-                        this.file.remove(key);
-                    } else {
-                        this.file.set(key, v.trim());
-                    }
-                    this.notice = None;
-                    cx.notify();
+                    let value = state.read(cx).value().trim().to_string();
+                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
+                    this.commit(key, value, Kept::Input, cx);
                 }
             });
             self._subscriptions.push(sub);
-            self.text_inputs.insert(key, state);
         }
-        self.text_inputs.get(key).unwrap().clone()
+        state
     }
 
     fn get_or_create_number_input(
@@ -753,32 +763,21 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        if !self.text_inputs.contains_key(key) {
-            let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(seed)
-                    .min(min)
-                    .max(max)
-                    .step(step)
-            });
+        let seed = self.file.get(key).unwrap_or_else(|| default_val.to_string());
+        let (state, created) = self
+            .editors
+            .number_input(key, &seed, min, max, step, window, cx);
+        if created {
             let sub = cx.subscribe_in(&state, window, move |this, state, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    let v = state.read(cx).value().to_string();
-                    if v.trim().is_empty() {
-                        this.file.remove(key);
-                    } else {
-                        this.file.set(key, v.trim());
-                    }
-                    this.sliders.remove(key);
-                    this.notice = None;
-                    cx.notify();
+                    let value = state.read(cx).value().trim().to_string();
+                    let value = if value.is_empty() { None } else { Some(value.as_str()) };
+                    this.commit(key, value, Kept::Input, cx);
                 }
             });
             self._subscriptions.push(sub);
-            self.text_inputs.insert(key, state);
         }
-        self.text_inputs.get(key).unwrap().clone()
+        state
     }
 
     fn render_list_editor_modal(
@@ -1466,7 +1465,7 @@ impl SettingsView {
                         if let Some(ActiveModal::ListEditor { key, items, .. }) = &this.active_modal {
                             let k = *key;
                             let items_clone = items.clone();
-                            this.file.set_all(k, &items_clone);
+                            this.commit_all(k, &items_clone, cx);
                             this.active_modal = None;
                             this.notice = Some(
                                 Text::new("'{}' 설정이 반영되었습니다.", "'{}' settings applied.").fill(&[k]),
@@ -1944,10 +1943,7 @@ impl SettingsView {
                             .child(name)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.file.set("theme", name);
-                                    this.selects.remove("theme");
-                                    this.notice = None;
-                                    cx.notify();
+                                    this.commit("theme", Some(name), Kept::Nothing, cx);
                                 });
                             })
                     })),
@@ -1991,9 +1987,7 @@ impl SettingsView {
                             .child(font)
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.file.set("font-family", font);
-                                    this.notice = None;
-                                    cx.notify();
+                                    this.commit("font-family", Some(font), Kept::Nothing, cx);
                                 });
                             })
                     })),
@@ -2078,16 +2072,12 @@ fn render_bounded_slider_number(
         );
     }
 
-    if !this.sliders.contains_key(key) {
-        let cur: f32 = val_str.parse().unwrap_or(default_val as f32);
-        let state = cx.new(|_cx| {
-            SliderState::new()
-                .min(min as f32)
-                .max(max as f32)
-                .step(step as f32)
-                .default_value(cur)
-        });
-        cx.subscribe(&state, move |this, _, event, cx| {
+    let cur: f32 = val_str.parse().unwrap_or(default_val as f32);
+    let (slider_state, created) =
+        this.editors
+            .slider(key, cur, min as f32, max as f32, step as f32, cx);
+    if created {
+        cx.subscribe(&slider_state, move |this, _, event, cx| {
             let (SliderEvent::Change(val) | SliderEvent::Release(val)) = event;
             let new_val = if is_float {
                 format!("{:.2}", val.start())
@@ -2097,16 +2087,10 @@ fn render_bounded_slider_number(
             } else {
                 format!("{}", val.start().round() as i64)
             };
-            this.file.set(key, &new_val);
-            this.text_inputs.remove(key);
-            this.notice = None;
-            cx.notify();
+            this.commit(key, Some(&new_val), Kept::Slider, cx);
         })
         .detach();
-        this.sliders.insert(key, state);
     }
-
-    let slider_state = this.sliders.get(key).unwrap().clone();
 
     h_flex()
         .gap_3()
@@ -2160,11 +2144,7 @@ fn render_chips_only(
                 .child(*label)
                 .on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| {
-                        this.file.set(key, &target_str);
-                        this.text_inputs.remove(key);
-                        this.sliders.remove(key);
-                        this.notice = None;
-                        cx.notify();
+                        this.commit(key, Some(&target_str), Kept::Nothing, cx);
                     });
                 })
         }))
@@ -2216,10 +2196,7 @@ fn render_input_with_chips(
                         .child(*label)
                         .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
-                                this.file.set(key, &target_str);
-                                this.text_inputs.remove(key);
-                                this.notice = None;
-                                cx.notify();
+                                this.commit(key, Some(&target_str), Kept::Nothing, cx);
                             });
                         })
                 }))
@@ -2242,46 +2219,34 @@ fn value_widget(
                 .checked(on)
                 .on_change(move |&value, _, cx| {
                     view.update(cx, |this, cx| {
-                        if value {
-                            this.file.set(key, "true");
-                        } else {
-                            this.file.set(key, "false");
-                        }
-                        this.notice = None;
-                        cx.notify();
+                        let value = if value { "true" } else { "false" };
+                        this.commit(key, Some(value), Kept::Nothing, cx);
                     });
                 })
                 .into_any_element()
         }
         Kind::Enum(items) => {
-            if !this.selects.contains_key(opt.key) {
-                let items_vec: Vec<SharedString> =
-                    items.iter().map(|s| s.to_string().into()).collect();
-                let current = this.file.get(opt.key);
-                let selected = current
-                    .as_ref()
-                    .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
-                    .map(IndexPath::new);
-                let state = cx.new(|cx| {
-                    SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
-                });
+            let items_vec: Vec<SharedString> =
+                items.iter().map(|s| s.to_string().into()).collect();
+            let current = this.file.get(opt.key);
+            let selected = current
+                .as_ref()
+                .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
+                .map(IndexPath::new);
+            let (state, created) =
+                this.editors
+                    .select(opt.key, items_vec, selected, window, cx);
+            if created {
                 let key = opt.key;
                 cx.subscribe(&state, move |this, _, event, cx| {
                     let SelectEvent::Confirm(value) = event;
-                    match value {
-                        Some(v) => this.file.set(key, v.as_ref()),
-                        None => this.file.remove(key),
-                    }
-                    this.notice = None;
-                    cx.notify();
+                    this.commit(key, value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
                 })
                 .detach();
-                this.selects.insert(opt.key, state);
             }
-            let state = this.selects.get(opt.key).unwrap();
             div()
                 .max_w(px(260.))
-                .child(Select::new(state).small())
+                .child(Select::new(&state).small())
                 .into_any_element()
         }
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
@@ -2404,10 +2369,12 @@ fn value_widget(
 
                                         this.update(cx, |this, cx| {
                                             if let Some(path) = result {
-                                                this.file.set("working-directory", &path);
-                                                this.text_inputs.remove("working-directory");
-                                                this.notice = None;
-                                                cx.notify();
+                                                this.commit(
+                                                    "working-directory",
+                                                    Some(&path),
+                                                    Kept::Nothing,
+                                                    cx,
+                                                );
                                             }
                                         })
                                         .ok();
@@ -2418,34 +2385,27 @@ fn value_widget(
                         .into_any_element()
                 }
                 "theme" => {
-                    if !this.selects.contains_key("theme") {
-                        let theme_names = get_ghostty_themes();
-                        let items_vec: Vec<SharedString> =
-                            theme_names.iter().map(|s| s.clone().into()).collect();
-                        let current = this.file.get("theme");
-                        let selected = current
-                            .as_ref()
-                            .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
-                            .map(IndexPath::new);
-                        let state = cx.new(|cx| {
-                            SelectState::new(SearchableVec::new(items_vec), selected, window, cx)
-                        });
-                        cx.subscribe(&state, move |this, _, event, cx| {
+                    let theme_names = get_ghostty_themes();
+                    let items_vec: Vec<SharedString> =
+                        theme_names.iter().map(|s| s.clone().into()).collect();
+                    let current = this.file.get("theme");
+                    let selected = current
+                        .as_ref()
+                        .and_then(|v| items_vec.iter().position(|x| x.as_ref() == v))
+                        .map(IndexPath::new);
+                    let (theme_select, created) =
+                        this.editors
+                            .select("theme", items_vec, selected, window, cx);
+                    if created {
+                        cx.subscribe(&theme_select, move |this, _, event, cx| {
                             let SelectEvent::Confirm(value) = event;
-                            match value {
-                                Some(v) => this.file.set("theme", v.as_ref()),
-                                None => this.file.remove("theme"),
-                            }
-                            this.notice = None;
-                            cx.notify();
+                            this.commit("theme", value.as_ref().map(|v| v.as_ref()), Kept::Select, cx);
                         })
                         .detach();
-                        this.selects.insert("theme", state);
                     }
-                    let theme_select = this.selects.get("theme").unwrap();
                     div()
                         .max_w(px(260.))
-                        .child(Select::new(theme_select).small())
+                        .child(Select::new(&theme_select).small())
                         .into_any_element()
                 }
                 "command" => {
@@ -2574,17 +2534,12 @@ fn value_widget(
             }
         }
         Kind::Color { .. } => {
-            if !this.colors.contains_key(opt.key) {
-                let current = this.file.get(opt.key);
-                let state = cx.new(|cx| {
-                    let mut s = ColorPickerState::new(window, cx);
-                    if let Some(val) = current.as_deref() {
-                        if let Some(h) = parse_hex_to_hsla(val) {
-                            s.set_value(h, window, cx);
-                        }
-                    }
-                    s
-                });
+            let current = this
+                .file
+                .get(opt.key)
+                .and_then(|value| parse_hex_to_hsla(&value));
+            let (state, created) = this.editors.color(opt.key, current, window, cx);
+            if created {
                 let key = opt.key;
                 cx.subscribe(&state, move |this, _, event, cx| {
                     if let ColorPickerEvent::Change(Some(color)) = event {
@@ -2595,20 +2550,16 @@ fn value_widget(
                             (rgba.g * 255.0).round() as u8,
                             (rgba.b * 255.0).round() as u8
                         );
-                        this.file.set(key, &hex);
-                        this.notice = None;
-                        cx.notify();
+                        this.commit(key, Some(&hex), Kept::Color, cx);
                     }
                 })
                 .detach();
-                this.colors.insert(opt.key, state);
             }
-            let state = this.colors.get(opt.key).unwrap();
             let current_text = this.file.get(opt.key).unwrap_or_default();
             h_flex()
                 .items_center()
                 .gap_2()
-                .child(ColorPicker::new(state).small())
+                .child(ColorPicker::new(&state).small())
                 .children(if !current_text.is_empty() {
                     Some(
                         div()
@@ -2878,13 +2829,12 @@ fn value_widget(
                                 } else {
                                     new_flags.push(flag.to_string());
                                 }
-                                if new_flags.is_empty() {
-                                    this.file.remove(key);
+                                let value = if new_flags.is_empty() {
+                                    None
                                 } else {
-                                    this.file.set(key, &new_flags.join(","));
-                                }
-                                this.notice = None;
-                                cx.notify();
+                                    Some(new_flags.join(","))
+                                };
+                                this.commit(key, value.as_deref(), Kept::Nothing, cx);
                             });
                         })
                 }))
