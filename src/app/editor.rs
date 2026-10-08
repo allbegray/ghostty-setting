@@ -8,6 +8,7 @@ use super::*;
 use super::commit::Reported;
 use super::row_rules;
 use super::controls::{self, Slider as SliderPolicy};
+use gpui_kit::App;
 use super::list_editor::ListEditorModal;
 use crate::app::value::{self, Stored};
 
@@ -68,6 +69,49 @@ fn render_bounded_slider_number(
         .into_any_element()
 }
 
+/// A quick-value chip: it lights when it carries the value the file holds,
+/// and writing its value is a click.
+fn chip(
+    key: &'static str,
+    label: &Text,
+    target: &'static str,
+    current_val: &str,
+    view: Entity<SettingsView>,
+    cx: &App,
+) -> impl IntoElement {
+    let is_active = row_rules::chip_is_active(current_val, target);
+    let target_str = target.to_string();
+    div()
+        .id(format!("{key}-chip-{target}"))
+        .cursor_pointer()
+        .px_1p5()
+        .py(px(1.))
+        .rounded_sm()
+        .border_1()
+        .text_xs()
+        .when(is_active, |s| {
+            s.bg(cx.theme().primary.opacity(0.12))
+                .border_color(cx.theme().primary)
+                .text_color(cx.theme().primary)
+        })
+        .when(!is_active, |s| {
+            s.bg(cx.theme().background)
+                .border_color(cx.theme().border)
+                .text_color(cx.theme().muted_foreground)
+                .hover(|s| s.text_color(cx.theme().foreground))
+        })
+        .child(label.s())
+        .on_click(move |_, _, cx| {
+            view.update(cx, |this, cx| {
+                this.commit(
+                    key,
+                    Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() },
+                    cx,
+                );
+            })
+        })
+}
+
 fn render_chips_only(
     key: &'static str,
     current_val: &str,
@@ -79,34 +123,7 @@ fn render_chips_only(
         .gap_1()
         .flex_wrap()
         .children(chips.iter().map(|(label, target)| {
-            let is_active = row_rules::chip_is_active(&current_val, target);
-            let view = view.clone();
-            let target_str = target.to_string();
-            div()
-                .id(format!("{key}-chip-{target}"))
-                .cursor_pointer()
-                .px_1p5()
-                .py(px(1.))
-                .rounded_sm()
-                .border_1()
-                .text_xs()
-                .when(is_active, |s| {
-                    s.bg(cx.theme().primary.opacity(0.12))
-                        .border_color(cx.theme().primary)
-                        .text_color(cx.theme().primary)
-                })
-                .when(!is_active, |s| {
-                    s.bg(cx.theme().background)
-                        .border_color(cx.theme().border)
-                        .text_color(cx.theme().muted_foreground)
-                        .hover(|s| s.text_color(cx.theme().foreground))
-                })
-                .child(label.s())
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| {
-                        this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() }, cx);
-                    });
-                })
+            chip(key, label, target, &current_val, view.clone(), cx)
         }))
         .into_any_element()
 }
@@ -131,35 +148,9 @@ fn render_input_with_chips(
                 .gap_1()
                 .flex_wrap()
                 .children(chips.iter().map(|(label, target)| {
-                    let is_active = row_rules::chip_is_active(&current_val, target);
-                    let view = view.clone();
-                    let target_str = target.to_string();
-                    div()
-                        .id(format!("{key}-chip-{target}"))
-                        .cursor_pointer()
-                        .px_1p5()
-                        .py(px(1.))
-                        .rounded_sm()
-                        .border_1()
-                        .text_xs()
-                        .when(is_active, |s| {
-                            s.bg(cx.theme().primary.opacity(0.12))
-                                .border_color(cx.theme().primary)
-                                .text_color(cx.theme().primary)
-                        })
-                        .when(!is_active, |s| {
-                            s.bg(cx.theme().background)
-                                .border_color(cx.theme().border)
-                                .text_color(cx.theme().muted_foreground)
-                                .hover(|s| s.text_color(cx.theme().foreground))
-                        })
-                        .child(label.s())
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.commit(key, Reported::Chosen { slot: Kept::Nothing, value: target_str.clone() }, cx);
-                            });
-                        })
+                    chip(key, label, target, &current_val, view.clone(), cx)
                 }))
+                .into_any_element()
         )
         .into_any_element()
 }

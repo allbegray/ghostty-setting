@@ -79,6 +79,7 @@ impl ListEditorModal {
 ///
 /// The list editor exists for repeatable keys; these are the four whose shape
 /// is not the generic one, and a test in this module checks each is one.
+#[cfg(test)]
 pub(crate) const LIST_MODAL_KEYS: &[&str] = &["keybind", "font-family", "font-feature", "config-file"];
 
 impl ListEditorModal {
