@@ -59,6 +59,7 @@ mod editors;
 mod list_editor;
 mod list_items;
 mod preview;
+mod row_rules;
 mod query;
 mod value;
 

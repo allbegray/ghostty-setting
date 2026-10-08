@@ -9,6 +9,7 @@
 
 use super::*;
 use super::list_items::ListItems;
+use super::row_rules;
 
 /// The state of the list-editor modal.
 ///
@@ -195,9 +196,7 @@ impl SettingsView {
                         .children(items.as_slice().iter().enumerate().map(|(ix, item)| {
                             let view = view.clone();
                             if matches!(kind, ListKind::Keybind) {
-                                let parts: Vec<&str> = item.splitn(2, '=').collect();
-                                let trigger = parts[0];
-                                let action = parts.get(1).unwrap_or(&"");
+                                let (trigger, action) = row_rules::binding_parts(item);
                                 let pretty = ghostty_trigger_to_pretty(trigger);
                                 h_flex()
                                     .id(format!("binding-item-{ix}"))

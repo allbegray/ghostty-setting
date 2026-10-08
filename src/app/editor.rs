@@ -6,6 +6,7 @@
 
 use super::*;
 use super::commit::Reported;
+use super::row_rules;
 use super::controls::{self, Slider as SliderPolicy};
 use super::list_editor::ListEditorModal;
 use super::list_items::ListItems;
@@ -79,7 +80,7 @@ fn render_chips_only(
         .gap_1()
         .flex_wrap()
         .children(chips.iter().map(|(label, target)| {
-            let is_active = current_val == *target;
+            let is_active = row_rules::chip_is_active(&current_val, target);
             let view = view.clone();
             let target_str = target.to_string();
             div()
@@ -131,7 +132,7 @@ fn render_input_with_chips(
                 .gap_1()
                 .flex_wrap()
                 .children(chips.iter().map(|(label, target)| {
-                    let is_active = current_val == *target;
+                    let is_active = row_rules::chip_is_active(&current_val, target);
                     let view = view.clone();
                     let target_str = target.to_string();
                     div()
@@ -323,6 +324,7 @@ pub(super) fn value_editor(
         }
         Kind::List => {
             let all = this.file.get_all(opt.key);
+            let (binding_shown, binding_more) = row_rules::binding_summary(&all);
             let key = opt.key;
             let view = cx.entity();
             let is_keybind = key == "keybind";
@@ -434,10 +436,7 @@ pub(super) fn value_editor(
                         h_flex()
                             .gap_1p5()
                             .items_center()
-                            .children(all.iter().take(2).map(|item| {
-                                let parts: Vec<&str> = item.splitn(2, '=').collect();
-                                let trigger = parts[0];
-                                let action = parts.get(1).unwrap_or(&"");
+                            .children(binding_shown.into_iter().map(|(trigger, action)| {
                                 let pretty = ghostty_trigger_to_pretty(trigger);
                                 h_flex()
                                     .gap_1()
@@ -468,12 +467,12 @@ pub(super) fn value_editor(
                                             })),
                                     )
                             }))
-                            .children(if all.len() > 2 {
+                            .children(if binding_more > 0 {
                                 Some(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(Text::new("외 {}개", "+{} more").fill(&[&(all.len() - 2).to_string()])),
+                                        .child(Text::new("외 {}개", "+{} more").fill(&[&binding_more.to_string()])),
                                 )
                             } else {
                                 None
@@ -526,7 +525,7 @@ pub(super) fn value_editor(
                 .flex_wrap()
                 .items_center()
                 .children(allowed_items.iter().map(|&flag| {
-                    let is_active = current_flags.iter().any(|f| f == flag);
+                    let is_active = row_rules::flag_is_active(&current_flags, flag);
                     let view = view.clone();
                     let current_flags = current_flags.clone();
                     div()
