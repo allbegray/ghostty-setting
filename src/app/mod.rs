@@ -51,6 +51,7 @@ use gpui_kit::{
 use gpui_kit::base::Disableable as _;
 
 mod chrome;
+mod chrome_sections;
 mod commit;
 mod controls;
 mod diff_modal;
@@ -691,8 +692,8 @@ impl Render for SettingsView {
                 cx.notify();
             }),
         };
-        let titlebar = chrome::title_bar(
-            &chrome::TitleBarInput {
+        let titlebar = chrome_sections::title_bar(
+            &chrome_sections::TitleBarInput {
                 path: &self.path,
                 dirty,
                 preview_open: self.show_preview,
@@ -701,9 +702,9 @@ impl Render for SettingsView {
             &actions,
             cx,
         );
-        let nav_items: Vec<chrome::NavItem> = CATEGORIES
+        let nav_items: Vec<chrome_sections::NavItem> = CATEGORIES
             .iter()
-            .map(|cat| chrome::NavItem {
+            .map(|cat| chrome_sections::NavItem {
                 label: cat.label.s().into(),
                 icon: category_icon(cat.id),
                 set_count: cat
@@ -719,8 +720,8 @@ impl Render for SettingsView {
                 cx.notify();
             },
         ));
-        let sidebar = chrome::nav_sidebar(
-            &chrome::NavSidebarInput {
+        let sidebar = chrome_sections::nav_sidebar(
+            &chrome_sections::NavSidebarInput {
                 items: &nav_items,
                 active: self.category,
                 searching: self.search.is_empty(),
@@ -730,7 +731,7 @@ impl Render for SettingsView {
             cx,
         );
         let content = self.option_table(window, cx);
-        let status = chrome::status_bar(self.notice.as_deref(), dirty, cx);
+        let status = chrome_sections::status_bar(self.notice.as_deref(), dirty, cx);
 
         let modal_overlay = match &self.active_modal {
             Some(ActiveModal::ListEditor(modal)) => Some(self.render_list_editor_modal(modal, cx)),
