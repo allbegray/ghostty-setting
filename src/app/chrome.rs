@@ -578,3 +578,142 @@ impl SettingsView {
         status.into_any_element()
     }
 }
+
+fn row(
+    this: &mut SettingsView,
+    opt: &'static Opt,
+    is_last: bool,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) -> gpui_kit::AnyElement {
+    let set = this.is_set(opt);
+    let key = opt.key;
+    let doc = opt.doc.s();
+    let opt_id = format!("opt-{key}");
+
+    let mut row = h_flex()
+        .id(key)
+        .items_center()
+        .gap_4()
+        .px_4()
+        .py(px(10.))
+        .hover(|s| s.bg(cx.theme().muted.opacity(0.35)));
+
+    if !is_last {
+        row = row.border_b_1().border_color(cx.theme().border.opacity(0.6));
+    }
+
+    let action_lane = if set {
+        let key2 = opt.key;
+        let view = cx.entity();
+        div()
+            .w(px(36.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                Button::new(format!("reset-{key2}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::RotateCcw)
+                    .tooltip(Text::new("기본값으로 되돌리기", "Reset to default").s())
+                    .on_click(move |_, _, cx| {
+                        view.update(cx, |this, cx| this.reset_key(key2, cx));
+                    }),
+            )
+    } else {
+        div().w(px(36.)).flex_none()
+    };
+
+    row.child(
+        HoverCard::new(format!("opt-doc-{key}"))
+            .anchor(Anchor::TopLeft)
+            .open_delay(Duration::from_millis(400))
+            .trigger(
+                v_flex()
+                    .id(opt_id)
+                    .w(px(240.))
+                    .flex_none()
+                    .gap_0()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_medium()
+                                    .text_color(cx.theme().foreground)
+                                    .child(opt.label.s()),
+                            )
+                            .children(if !opt.platform.is_empty() {
+                                Some(
+                                    div()
+                                        .text_xs()
+                                        .px_1p5()
+                                        .py(px(1.))
+                                        .rounded_md()
+                                        .bg(cx.theme().muted)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .font_family("Menlo")
+                                        .child(opt.platform),
+                                )
+                            } else {
+                                None
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family("Menlo")
+                            .text_color(cx.theme().muted_foreground)
+                            .child(key),
+                    ),
+            )
+            .content(move |_, _, _| doc_card(doc, key)),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(editor::value_editor(this, opt, window, cx)),
+    )
+    .child(
+        div()
+            .w(px(80.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(if set {
+                div()
+                    .px_2()
+                    .py(px(2.))
+                    .rounded_full()
+                    .bg(cx.theme().primary.opacity(0.12))
+                    .text_color(cx.theme().primary)
+                    .text_xs()
+                    .font_medium()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(5.)).rounded_full().bg(cx.theme().primary))
+                    .child(Text::new("설정됨", "Set").s())
+                    .into_any_element()
+            } else {
+                div()
+                    .px_2()
+                    .py(px(2.))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Text::new("기본값", "Default").s())
+                    .into_any_element()
+            }),
+    )
+    .child(action_lane)
+    .into_any_element()
+}
