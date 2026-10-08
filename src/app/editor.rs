@@ -14,7 +14,8 @@ use super::list_editor::ListEditorModal;
 use crate::app::value::{self, Stored};
 
 fn render_bounded_slider_number(
-    this: &mut SettingsView,
+    file: &LineFile,
+    editors: &mut EditorCache,
     key: &'static str,
     val_str: &str,
     min: f64,
@@ -23,15 +24,7 @@ fn render_bounded_slider_number(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
-    let num_state = this.get_or_create_number_input(
-        key,
-        &format!("{}", slider.default),
-        min,
-        max,
-        slider.step,
-        window,
-        cx,
-    );
+    let num_state = number_input(editors, file, key, &format!("{}", slider.default), min, max, slider.step, window, cx);
 
     let mut num_input = NumberInput::new(&num_state).small();
     if let Some(unit) = slider.unit {
@@ -44,7 +37,7 @@ fn render_bounded_slider_number(
     }
 
     let cur: f32 = val_str.parse().unwrap_or(slider.default as f32);
-    let slider_state = this.editors.slider(
+    let slider_state = editors.slider(
         key,
         cur,
         min as f32,
@@ -157,14 +150,15 @@ fn render_input_with_chips(
 }
 
 pub(super) fn value_editor(
-    this: &mut SettingsView,
+    file: &LineFile,
+    editors: &mut EditorCache,
     opt: &'static Opt,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> gpui_kit::AnyElement {
     match opt.kind {
         Kind::Bool => {
-            let on = Stored::new(this.file.get(opt.key).as_deref()).is_on();
+            let on = Stored::new(file.get(opt.key).as_deref()).is_on();
             let view = cx.entity();
             let key = opt.key;
             Switch::new(opt.key)
@@ -180,11 +174,11 @@ pub(super) fn value_editor(
         Kind::Enum(items) => {
             let items_vec: Vec<SharedString> =
                 items.iter().map(|s| s.to_string().into()).collect();
-            let current = this.file.get(opt.key);
+            let current = file.get(opt.key);
             let selected = Stored::new(current.as_deref())
                 .index_in(&items_vec)
                 .map(IndexPath::new);
-            let state = this.editors.select(opt.key, items_vec, selected, window, cx);
+            let state = editors.select(opt.key, items_vec, selected, window, cx);
             div()
                 .max_w(px(260.))
                 .child(Select::new(&state).small())
@@ -192,12 +186,13 @@ pub(super) fn value_editor(
         }
         Kind::Int { .. } | Kind::Float { .. } | Kind::Text => {
             let key = opt.key;
-            let current_val = this.file.get(key).unwrap_or_default();
+            let current_val = file.get(key).unwrap_or_default();
             let (bound_min, bound_max) = controls::edit_bounds(opt);
 
             if let Some(slider) = controls::slider(key) {
                 return render_bounded_slider_number(
-                    this,
+                    file,
+                    editors,
                     key,
                     &current_val,
                     bound_min,
@@ -210,7 +205,7 @@ pub(super) fn value_editor(
             match key {
                 "window-width" | "window-height" => {
                     let field = controls::size_field(key).expect("the window sizes have a field");
-                    let num_state = this.get_or_create_number_input(key, field.default, bound_min, bound_max, field.step, window, cx);
+                    let num_state = number_input(editors, file, key, field.default, bound_min, bound_max, field.step, window, cx);
                     let num_input = NumberInput::new(&num_state).small().suffix(
                         div().text_xs().text_color(cx.theme().muted_foreground).child(field.unit.map(|u| u.s()).unwrap_or("")),
                     );
@@ -222,7 +217,7 @@ pub(super) fn value_editor(
                         .into_any_element()
                 }
                 "working-directory" => {
-                    let state = this.get_or_create_input(opt, window, cx);
+                    let state = input(editors, file, opt, window, cx);
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -264,18 +259,18 @@ pub(super) fn value_editor(
                     let theme_names = get_ghostty_themes();
                     let items_vec: Vec<SharedString> =
                         theme_names.iter().map(|s| s.clone().into()).collect();
-                    let current = this.file.get("theme");
+                    let current = file.get("theme");
                     let selected = Stored::new(current.as_deref())
                         .index_in(&items_vec)
                         .map(IndexPath::new);
-                    let theme_select = this.editors.select(key, items_vec, selected, window, cx);
+                    let theme_select = editors.select(key, items_vec, selected, window, cx);
                     div()
                         .max_w(px(260.))
                         .child(Select::new(&theme_select).small())
                         .into_any_element()
                 }
                 _ => {
-                    let state = this.get_or_create_input(opt, window, cx);
+                    let state = input(editors, file, opt, window, cx);
                     if let Some(chips) = controls::chips(key) {
                         return render_input_with_chips(&state, key, &current_val, chips, cx.entity(), cx);
                     }
@@ -287,9 +282,9 @@ pub(super) fn value_editor(
             }
         }
         Kind::Color { .. } => {
-            let current = Stored::new(this.file.get(opt.key).as_deref()).color();
-            let state = this.editors.color(opt.key, current, window, cx);
-            let current_text = this.file.get(opt.key).unwrap_or_default();
+            let current = Stored::new(file.get(opt.key).as_deref()).color();
+            let state = editors.color(opt.key, current, window, cx);
+            let current_text = file.get(opt.key).unwrap_or_default();
             h_flex()
                 .items_center()
                 .gap_2()
@@ -314,7 +309,7 @@ pub(super) fn value_editor(
                 .into_any_element()
         }
         Kind::List => {
-            let all = this.file.get_all(opt.key);
+            let all = file.get_all(opt.key);
             let (binding_shown, binding_more) = row_rules::binding_summary(&all);
             let key = opt.key;
             let view = cx.entity();
@@ -335,7 +330,7 @@ pub(super) fn value_editor(
                         })
                         .on_click(move |_, window, cx| {
                             view.update(cx, |this, cx| {
-                                let items = this.file.get_all(key);
+                                let items: Vec<String> = this.file.get_all(key);
                                 let recorder_focus = cx.focus_handle();
                                 let new_item_input = cx.new(|cx| InputState::new(window, cx).placeholder(Text::new("새 항목 입력", "Enter new item").s()));
                                 let action_select = if is_keybind {
@@ -505,7 +500,7 @@ pub(super) fn value_editor(
                 .into_any_element()
         }
         Kind::Flags(allowed_items) => {
-            let current_flags: Vec<String> = Stored::new(this.file.get(opt.key).as_deref())
+            let current_flags: Vec<String> = Stored::new(file.get(opt.key).as_deref())
                 .flags()
                 .iter()
                 .map(|flag| flag.to_string())

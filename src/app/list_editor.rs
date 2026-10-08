@@ -74,11 +74,6 @@ impl ListEditorModal {
         window.focus(&self.recorder_focus, cx);
     }
 
-    /// Abandon a recording in progress.
-    pub(crate) fn cancel_recording(&mut self) {
-        self.is_recording = false;
-    }
-
     /// Hand the recorder a key press, and report whether the modal changed.
     ///
     /// The whole rule: escape abandons the recording, a modifier on its own is

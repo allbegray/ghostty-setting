@@ -761,7 +761,7 @@ fn row(
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .child(editor::value_editor(this, opt, window, cx)),
+            .child(editor::value_editor(&this.file, &mut this.editors, opt, window, cx)),
     )
     .child(
         div()
